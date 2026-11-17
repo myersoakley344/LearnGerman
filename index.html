@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="mg">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f6f8">
+  <title>Fianarana teny alemà</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <style>
+    :root {
+      font-family: system-ui, sans-serif;
+      color: #18212b;
+      background: #f4f6f8;
+      font-size: 16px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 16px;
+    }
+
+    main {
+      width: 100%;
+      max-width: 520px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin: 8px 0 20px;
+      font-size: 1.45rem;
+      line-height: 1.25;
+    }
+
+    .card {
+      padding: 18px;
+      margin: 12px 0;
+      background: #fff;
+      border: 1px solid #d9e0e6;
+      border-radius: 14px;
+      box-shadow: 0 2px 8px #1020300d;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 650;
+    }
+
+    input,
+    select,
+    button {
+      width: 100%;
+      min-height: 50px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      font: inherit;
+    }
+
+    input,
+    select {
+      border: 1px solid #b8c2cc;
+      background: #fff;
+    }
+
+    button {
+      border: 0;
+      font-weight: 700;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .primary {
+      color: #fff;
+      background: #1769aa;
+    }
+
+    .secondary {
+      color: #17324a;
+      background: #e5edf4;
+    }
+
+    .danger {
+      color: #fff;
+      background: #6d7781;
+    }
+
+    .stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .top-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .top-row button {
+      width: auto;
+      min-height: 42px;
+      padding: 8px 12px;
+    }
+
+    .muted {
+      color: #53616f;
+      font-size: 0.92rem;
+    }
+
+    .prompt {
+      min-height: 160px;
+      display: grid;
+      place-items: center;
+      margin: 18px 0;
+      padding: 24px 12px;
+      text-align: center;
+      font-size: clamp(1.7rem, 9vw, 2.5rem);
+      font-weight: 750;
+      overflow-wrap: anywhere;
+      background: #f0f4f7;
+      border: 1px solid #d9e0e6;
+      border-radius: 12px;
+    }
+
+    .message {
+      min-height: 24px;
+      margin-top: 12px;
+      color: #a12626;
+      overflow-wrap: anywhere;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section id="login-screen" class="card">
+      <h1>Fianarana teny alemà</h1>
+
+      <form id="login-form" class="stack">
+        <div>
+          <label for="access-code">Kaody fidirana</label>
+          <input
+            id="access-code"
+            type="text"
+            autocomplete="username"
+            autocapitalize="none"
+            required
+          >
+        </div>
+
+        <button class="primary" type="submit">Hiditra</button>
+      </form>
+
+      <div id="login-message" class="message" role="status"></div>
+    </section>
+
+    <section id="app-screen" class="hidden">
+      <div class="top-row">
+        <div>
+          <div id="participant-name"></div>
+          <div id="item-position" class="muted"></div>
+        </div>
+        <button id="logout-button" class="danger" type="button">
+          Hivoaka
+        </button>
+      </div>
+
+      <div class="card">
+        <label for="lesson-select">Lesona</label>
+        <select id="lesson-select"></select>
+
+        <div id="lesson-title" class="muted"></div>
+
+        <div id="prompt" class="prompt" aria-live="polite">
+          ...
+        </div>
+
+        <div class="stack">
+          <button id="repeat-button" class="secondary" type="button">
+            Avereno ity teny ity
+          </button>
+          <button id="skip-button" class="primary" type="button">
+            Teny manaraka
+          </button>
+        </div>
+
+        <div id="app-message" class="message" role="status"></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const SUPABASE_URL =
+      "https://coaiznrxtpdqatvfbsyi.supabase.co";
+
+    const SUPABASE_KEY =
+      "sb_publishable_D0adyb95if5W2IH5WA9JOQ_ENePqpoh";
+
+    const supabaseClient = window.supabase.createClient(
+      SUPABASE_URL,
+      SUPABASE_KEY
+    );
+
+    let currentUser = null;
+    let lessons = [];
+    let items = [];
+    let currentIndex = 0;
+
+    const loginScreen = document.getElementById("login-screen");
+    const appScreen = document.getElementById("app-screen");
+    const loginMessage = document.getElementById("login-message");
+    const appMessage = document.getElementById("app-message");
+    const lessonSelect = document.getElementById("lesson-select");
+
+    function showMessage(element, text, isError = true) {
+      element.textContent = text;
+      element.style.color = isError ? "#a12626" : "#236b37";
+    }
+
+    async function logEvent(eventType, details = {}) {
+      if (!currentUser) return;
+
+      const { error } = await supabaseClient
+        .from("learn_events")
+        .insert({
+          client_event_id: crypto.randomUUID(),
+          user_id: currentUser.id,
+          lesson_id: details.lessonId || null,
+          item_id: details.itemId || null,
+          event_type: eventType,
+          client_time: new Date().toISOString(),
+          payload: details.payload || {}
+        });
+
+      if (error) {
+        console.error("Event logging failed:", error);
+        showMessage(
+          appMessage,
+          "Tsy voatahiry ny hetsika sasany. Jereo ny fifandraisana.",
+          true
+        );
+      }
+    }
+
+    async function enterApp(user) {
+      currentUser = user;
+      loginScreen.classList.add("hidden");
+      appScreen.classList.remove("hidden");
+      document.getElementById("participant-name").textContent =
+        user.email || "Mpianatra";
+
+      await loadLessons();
+    }
+
+    async function loadLessons() {
+      appMessage.textContent = "";
+
+      const { data, error } = await supabaseClient
+        .from("learn_lessons")
+        .select("id, slug, title, order_index")
+        .eq("is_published", true)
+        .order("order_index");
+
+      if (error) {
+        console.error(error);
+        showMessage(appMessage, "Tsy afaka naka ny lesona.");
+        return;
+      }
+
+      lessons = data || [];
+
+      lessonSelect.replaceChildren();
+
+      for (const lesson of lessons) {
+        const option = document.createElement("option");
+        option.value = lesson.id;
+        option.textContent = lesson.title;
+        lessonSelect.appendChild(option);
+      }
+
+      if (lessons.length === 0) {
+        showMessage(appMessage, "Mbola tsy misy lesona navoaka.");
+        return;
+      }
+
+      await loadItems(lessons[0].id);
+    }
+
+    async function loadItems(lessonId) {
+      appMessage.textContent = "";
+      currentIndex = 0;
+
+      const lesson = lessons.find(item => item.id === lessonId);
+      document.getElementById("lesson-title").textContent =
+        lesson ? lesson.title : "";
+
+      const { data, error } = await supabaseClient
+        .from("learn_learner_items")
+        .select("id, lesson_id, order_index, prompt_mg")
+        .eq("lesson_id", lessonId)
+        .order("order_index");
+
+      if (error) {
+        console.error(error);
+        items = [];
+        renderItem();
+        showMessage(appMessage, "Tsy afaka naka ny teny.");
+        return;
+      }
+
+      items = data || [];
+
+      await logEvent("lesson_opened", {
+        lessonId,
+        payload: { itemCount: items.length }
+      });
+
+      renderItem();
+    }
+
+    function renderItem() {
+      const prompt = document.getElementById("prompt");
+      const position = document.getElementById("item-position");
+      const skipButton = document.getElementById("skip-button");
+      const repeatButton = document.getElementById("repeat-button");
+
+      if (items.length === 0) {
+        prompt.textContent = "Tsy misy teny ato amin'ity lesona ity.";
+        position.textContent = "";
+        skipButton.disabled = true;
+        repeatButton.disabled = true;
+        return;
+      }
+
+      skipButton.disabled = false;
+      repeatButton.disabled = false;
+
+      const item = items[currentIndex];
+      prompt.textContent = item.prompt_mg;
+      position.textContent =
+        `Teny ${currentIndex + 1} / ${items.length}`;
+
+      logEvent("item_shown", {
+        lessonId: item.lesson_id,
+        itemId: item.id,
+        payload: { index: currentIndex }
+      });
+    }
+
+    document
+      .getElementById("login-form")
+      .addEventListener("submit", async event => {
+        event.preventDefault();
+        loginMessage.textContent = "";
+
+        const code = document
+          .getElementById("access-code")
+          .value
+          .trim()
+          .toLowerCase();
+
+        if (!code) return;
+
+        const { data, error } = await supabaseClient.auth
+          .signInWithPassword({
+            email: `${code}@malagasy.local`,
+            password: code
+          });
+
+        if (error) {
+          console.error(error);
+          showMessage(loginMessage, "Diso ny kaody fidirana.");
+          return;
+        }
+
+        await enterApp(data.user);
+      });
+
+    lessonSelect.addEventListener("change", async () => {
+      await loadItems(lessonSelect.value);
+    });
+
+    document
+      .getElementById("repeat-button")
+      .addEventListener("click", async () => {
+        const item = items[currentIndex];
+        if (!item) return;
+
+        await logEvent("item_repeated", {
+          lessonId: item.lesson_id,
+          itemId: item.id,
+          payload: { index: currentIndex }
+        });
+
+        showMessage(appMessage, "Averina ilay teny.", false);
+      });
+
+    document
+      .getElementById("skip-button")
+      .addEventListener("click", async () => {
+        const item = items[currentIndex];
+        if (!item || items.length === 0) return;
+
+        await logEvent("item_skipped", {
+          lessonId: item.lesson_id,
+          itemId: item.id,
+          payload: { index: currentIndex }
+        });
+
+        currentIndex = (currentIndex + 1) % items.length;
+        appMessage.textContent = "";
+        renderItem();
+      });
+
+    document
+      .getElementById("logout-button")
+      .addEventListener("click", async () => {
+        await supabaseClient.auth.signOut();
+        location.reload();
+      });
+
+    async function restoreSession() {
+      const { data, error } = await supabaseClient.auth.getSession();
+
+      if (error) {
+        console.error(error);
+        return;
+      }
+
+      if (data.session?.user) {
+        await enterApp(data.session.user);
+      }
+    }
+
+    restoreSession();
+  </script>
+</body>
+</html>
