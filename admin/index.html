@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f6f8">
+  <title>LearnGerman Admin</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <style>
+    :root {
+      font-family: system-ui, sans-serif;
+      color: #18212b;
+      background: #f4f6f8;
+      font-size: 16px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 16px;
+    }
+
+    main {
+      width: 100%;
+      max-width: 760px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+    }
+
+    .card {
+      margin: 12px 0;
+      padding: 16px;
+      background: #fff;
+      border: 1px solid #d9e0e6;
+      border-radius: 14px;
+    }
+
+    label {
+      display: block;
+      margin: 12px 0 6px;
+      font-weight: 650;
+    }
+
+    input,
+    select,
+    button {
+      width: 100%;
+      min-height: 48px;
+      padding: 11px 13px;
+      border-radius: 9px;
+      font: inherit;
+    }
+
+    input,
+    select {
+      border: 1px solid #b8c2cc;
+      background: #fff;
+    }
+
+    button {
+      border: 0;
+      font-weight: 700;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .primary {
+      color: #fff;
+      background: #1769aa;
+    }
+
+    .secondary {
+      color: #17324a;
+      background: #e5edf4;
+    }
+
+    .danger {
+      color: #fff;
+      background: #6d7781;
+    }
+
+    .stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .row button {
+      width: auto;
+      min-height: 42px;
+    }
+
+    .muted {
+      color: #53616f;
+      font-size: 0.92rem;
+    }
+
+    .item {
+      margin-top: 12px;
+      padding: 14px;
+      border: 1px solid #d9e0e6;
+      border-radius: 10px;
+    }
+
+    .item h3 {
+      margin: 0 0 6px;
+    }
+
+    .message {
+      min-height: 24px;
+      margin-top: 12px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    audio {
+      width: 100%;
+      margin-top: 12px;
+    }
+
+    code {
+      overflow-wrap: anywhere;
+    }
+  </style>
+</head>
+
+<body>
+<main>
+  <section id="login-screen" class="card">
+    <h1>LearnGerman Admin</h1>
+    <p class="muted">
+      Sign in with the administrator access code.
+    </p>
+
+    <form id="login-form" class="stack">
+      <div>
+        <label for="access-code">Access code</label>
+        <input
+          id="access-code"
+          type="text"
+          autocomplete="username"
+          autocapitalize="none"
+          required
+        >
+      </div>
+
+      <button class="primary" type="submit">Sign in</button>
+    </form>
+
+    <div id="login-message" class="message" role="status"></div>
+  </section>
+
+  <section id="admin-screen" class="hidden">
+    <div class="card row">
+      <div>
+        <strong>Admin</strong>
+        <div id="admin-email" class="muted"></div>
+      </div>
+      <button id="logout-button" class="danger" type="button">
+        Sign out
+      </button>
+    </div>
+
+    <section class="card">
+      <h1>Generate German TTS</h1>
+
+      <label for="api-key">NanoGPT API key</label>
+      <input
+        id="api-key"
+        type="password"
+        autocomplete="off"
+        placeholder="Enter key for this session"
+      >
+      <p class="muted">
+        The key is kept only in this page's memory and is not saved
+        to Supabase.
+      </p>
+
+      <label for="lesson-select">Lesson</label>
+      <select id="lesson-select"></select>
+
+      <div id="items-list"></div>
+      <div id="admin-message" class="message" role="status"></div>
+    </section>
+  </section>
+</main>
+
+<script>
+  const SUPABASE_URL =
+    "https://coaiznrxtpdqatvfbsyi.supabase.co";
+
+  const SUPABASE_KEY =
+    "sb_publishable_D0adyb95if5W2IH5WA9JOQ_ENePqpoh";
+
+  const TTS_API_URL =
+    "https://api.nano-gpt.com/api/v1/audio/speech";
+
+  const TTS_MODEL =
+    "google/gemini-3.8-flash-tts";
+
+  const TTS_VOICE = "Kore";
+
+  const supabaseClient = window.supabase.createClient(
+    SUPABASE_URL,
+    SUPABASE_KEY
+  );
+
+  let currentUser = null;
+  let lessons = [];
+  let items = [];
+  let previewBlob = null;
+  let previewItemId = null;
+  let previewUrl = null;
+
+  const loginScreen = document.getElementById("login-screen");
+  const adminScreen = document.getElementById("admin-screen");
+  const loginMessage = document.getElementById("login-message");
+  const adminMessage = document.getElementById("admin-message");
+  const lessonSelect = document.getElementById("lesson-select");
+  const itemsList = document.getElementById("items-list");
+
+  function setMessage(element, text, isError = false) {
+    element.textContent = text;
+    element.style.color = isError ? "#a12626" : "#236b37";
+  }
+
+  function getApiKey() {
+    return document.getElementById("api-key").value.trim();
+  }
+
+  async function verifyAdmin(user) {
+    const { data, error } = await supabaseClient
+      .from("learn_profiles")
+      .select("display_name, role")
+      .eq("id", user.id)
+      .single();
+
+    if (error) throw error;
+
+    if (data.role !== "admin") {
+      throw new Error("This account does not have the admin role.");
+    }
+
+    return data;
+  }
+
+  async function enterAdmin(user) {
+    const profile = await verifyAdmin(user);
+
+    currentUser = user;
+    loginScreen.classList.add("hidden");
+    adminScreen.classList.remove("hidden");
+
+    document.getElementById("admin-email").textContent =
+      profile.display_name || user.email || "";
+
+    await loadLessons();
+  }
+
+  async function loadLessons() {
+    setMessage(adminMessage, "Loading lessons...");
+
+    const { data, error } = await supabaseClient
+      .from("learn_lessons")
+      .select("id, slug, title, order_index")
+      .order("order_index");
+
+    if (error) {
+      console.error(error);
+      setMessage(adminMessage, error.message, true);
+      return;
+    }
+
+    lessons = data || [];
+    lessonSelect.replaceChildren();
+
+    for (const lesson of lessons) {
+      const option = document.createElement("option");
+      option.value = lesson.id;
+      option.textContent = lesson.title;
+      lessonSelect.appendChild(option);
+    }
+
+    if (!lessons.length) {
+      itemsList.replaceChildren();
+      setMessage(adminMessage, "No lessons found.", true);
+      return;
+    }
+
+    await loadItems(lessons[0].id);
+    setMessage(adminMessage, "");
+  }
+
+  async function loadItems(lessonId) {
+    setMessage(adminMessage, "Loading items...");
+
+    const { data, error } = await supabaseClient
+      .from("learn_items")
+      .select(
+        "id, lesson_id, order_index, prompt_mg, target_de, tts_audio_path"
+      )
+      .eq("lesson_id", lessonId)
+      .order("order_index");
+
+    if (error) {
+      console.error(error);
+      setMessage(adminMessage, error.message, true);
+      return;
+    }
+
+    items = data || [];
+    renderItems();
+    setMessage(adminMessage, "");
+  }
+
+  function renderItems() {
+    itemsList.replaceChildren();
+
+    for (const item of items) {
+      const card = document.createElement("article");
+      card.className = "item";
+
+      const title = document.createElement("h3");
+      title.textContent = `${item.order_index}. ${item.target_de}`;
+
+      const prompt = document.createElement("div");
+      prompt.className = "muted";
+      prompt.textContent = `Malagasy prompt: ${item.prompt_mg}`;
+
+      const status = document.createElement("div");
+      status.className = "muted";
+      status.textContent = item.tts_audio_path
+        ? `Audio saved: ${item.tts_audio_path}`
+        : "No saved audio.";
+
+      const actions = document.createElement("div");
+      actions.className = "stack";
+      actions.style.marginTop = "10px";
+
+      const generateButton = document.createElement("button");
+      generateButton.className = "primary";
+      generateButton.type = "button";
+      generateButton.textContent = "Generate preview";
+      generateButton.addEventListener("click", () => generatePreview(item));
+
+      const saveButton = document.createElement("button");
+      saveButton.className = "secondary";
+      saveButton.type = "button";
+      saveButton.textContent = "Save preview to Supabase";
+      saveButton.disabled =
+        !previewBlob || previewItemId !== item.id;
+      saveButton.addEventListener("click", () => savePreview(item));
+
+      actions.append(generateButton, saveButton);
+      card.append(title, prompt, status, actions);
+
+      if (item.tts_audio_path) {
+        const savedAudio = document.createElement("audio");
+        savedAudio.controls = true;
+        savedAudio.src = getPublicAudioUrl(item.tts_audio_path);
+        card.appendChild(savedAudio);
+      }
+
+      itemsList.appendChild(card);
+    }
+  }
+
+  function getPublicAudioUrl(path) {
+    return supabaseClient
+      .storage
+      .from("learn-tts")
+      .getPublicUrl(path)
+      .data
+      .publicUrl;
+  }
+
+  function costFromHeaders(headers) {
+    const raw =
+      headers.get("x-nanogpt-pricing") ||
+      headers.get("x-nanogpt-cost");
+
+    if (!raw) return null;
+
+    try {
+      const parsed = JSON.parse(raw);
+      const amount = parsed.amount ?? parsed.cost;
+      const value = Number(amount);
+      return Number.isFinite(value) ? value : null;
+    } catch {
+      const match = raw.match(/-?\d+(?:\.\d+)?/);
+      if (!match) return null;
+
+      const value = Number(match[0]);
+      return Number.isFinite(value) ? value : null;
+    }
+  }
+
+  async function logTtsUsage({
+    requestId,
+    status,
+    cost,
+    errorMessage
+  }) {
+    const lessonId = lessonSelect.value;
+    const itemId = previewItemId;
+
+    const { error } = await supabaseClient
+      .from("learn_api_usage")
+      .insert({
+        client_request_id: crypto.randomUUID(),
+        user_id: currentUser.id,
+        item_id: itemId,
+        provider: "NanoGPT",
+        model_name: TTS_MODEL,
+        operation: "tts",
+        status,
+        estimated_cost: cost,
+        currency: "USD",
+        provider_request_id: requestId || null,
+        pricing_version: "NanoGPT price list; verify against account",
+        completed_at: new Date().toISOString(),
+        // Store only diagnostic text, never the API key.
+        ...(errorMessage
+          ? { input_tokens: null }
+          : {})
+      });
+
+    if (error) {
+      console.error("Could not log TTS request:", error);
+    }
+  }
+
+  async function generatePreview(item) {
+    const apiKey = getApiKey();
+
+    if (!apiKey) {
+      setMessage(adminMessage, "Enter the NanoGPT API key first.", true);
+      return;
+    }
+
+    if (
+      item.tts_audio_path &&
+      !window.confirm(
+        "This item already has saved audio. Generate a new preview?"
+      )
+    ) {
+      return;
+    }
+
+    setMessage(adminMessage, `Generating audio for "${item.target_de}"...`);
+
+    previewBlob = null;
+    previewItemId = null;
+
+    const buttons = [...itemsList.querySelectorAll("button")];
+    buttons.forEach(button => {
+      button.disabled = true;
+    });
+
+    let response = null;
+
+    try {
+      response = await fetch(TTS_API_URL, {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "Content-Type": "application/json",
+          "Accept": "audio/wav, audio/*, application/json"
+        },
+        body: JSON.stringify({
+          model: TTS_MODEL,
+          input: item.target_de,
+          voice: TTS_VOICE,
+          instructions:
+            "Speak clearly in neutral Standard German as spoken in Germany. " +
+            "Use a natural, calm pronunciation.",
+          response_format: "wav"
+        })
+      });
+
+      const requestId = response.headers.get("x-request-id");
+      const cost = costFromHeaders(response.headers);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+
+        await logTtsUsage({
+          requestId,
+          status: "error",
+          cost,
+          errorMessage: errorText
+        });
+
+        throw new Error(
+          `NanoGPT HTTP ${response.status}: ${errorText.slice(0, 1500)}`
+        );
+      }
+
+      const contentType =
+        (response.headers.get("content-type") || "").toLowerCase();
+
+      if (contentType.includes("application/json")) {
+        const body = await response.json();
+
+        await logTtsUsage({
+          requestId,
+          status: "error",
+          cost,
+          errorMessage: "Expected WAV audio bytes, received JSON."
+        });
+
+        throw new Error(
+          "NanoGPT returned JSON instead of audio: " +
+          JSON.stringify(body).slice(0, 1000)
+        );
+      }
+
+      const blob = await response.blob();
+
+      if (blob.size === 0) {
+        throw new Error("NanoGPT returned an empty audio file.");
+      }
+
+      previewBlob = blob;
+      previewItemId = item.id;
+
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = URL.createObjectURL(blob);
+
+      let player = document.getElementById("preview-player");
+      if (!player) {
+        player = document.createElement("audio");
+        player.id = "preview-player";
+        player.controls = true;
+        player.style.width = "100%";
+        itemsList.before(player);
+      }
+
+      player.src = previewUrl;
+
+      await logTtsUsage({
+        requestId,
+        status: "success",
+        cost,
+        errorMessage: null
+      });
+
+      renderItems();
+      setMessage(
+        adminMessage,
+        `Preview generated for "${item.target_de}". Listen, then save it if it sounds right.`
+      );
+    } catch (error) {
+      console.error(error);
+      setMessage(adminMessage, error.message || String(error), true);
+    } finally {
+      renderItems();
+    }
+  }
+
+  async function savePreview(item) {
+    if (!previewBlob || previewItemId !== item.id) {
+      setMessage(adminMessage, "Generate a preview for this item first.", true);
+      return;
+    }
+
+    if (
+      item.tts_audio_path &&
+      !window.confirm(
+        "Replace the saved audio for this item?"
+      )
+    ) {
+      return;
+    }
+
+    const lesson = lessons.find(value => value.id === item.lesson_id);
+    const path =
+      `${lesson.slug}/${item.id}.wav`;
+
+    setMessage(adminMessage, `Saving audio for "${item.target_de}"...`);
+
+    const { error: uploadError } = await supabaseClient
+      .storage
+      .from("learn-tts")
+      .upload(path, previewBlob, {
+        contentType: "audio/wav",
+        upsert: true
+      });
+
+    if (uploadError) {
+      console.error(uploadError);
+      setMessage(adminMessage, uploadError.message, true);
+      return;
+    }
+
+    const { error: updateError } = await supabaseClient
+      .from("learn_items")
+      .update({ tts_audio_path: path })
+      .eq("id", item.id);
+
+    if (updateError) {
+      console.error(updateError);
+      setMessage(
+        adminMessage,
+        `Audio uploaded, but database update failed: ${updateError.message}`,
+        true
+      );
+      return;
+    }
+
+    item.tts_audio_path = path;
+    renderItems();
+    setMessage(
+      adminMessage,
+      `Saved audio for "${item.target_de}".`,
+      false
+    );
+  }
+
+  document
+    .getElementById("login-form")
+    .addEventListener("submit", async event => {
+      event.preventDefault();
+      setMessage(loginMessage, "Signing in...");
+
+      const code = document
+        .getElementById("access-code")
+        .value
+        .trim()
+        .toLowerCase();
+
+      const { data, error } = await supabaseClient.auth
+        .signInWithPassword({
+          email: `${code}@malagasy.local`,
+          password: code
+        });
+
+      if (error) {
+        console.error(error);
+        setMessage(loginMessage, "Invalid access code.", true);
+        return;
+      }
+
+      try {
+        await enterAdmin(data.user);
+      } catch (adminError) {
+        console.error(adminError);
+        await supabaseClient.auth.signOut();
+        setMessage(loginMessage, adminError.message, true);
+      }
+    });
+
+  lessonSelect.addEventListener("change", async () => {
+    previewBlob = null;
+    previewItemId = null;
+    await loadItems(lessonSelect.value);
+  });
+
+  document
+    .getElementById("logout-button")
+    .addEventListener("click", async () => {
+      document.getElementById("api-key").value = "";
+      await supabaseClient.auth.signOut();
+      location.reload();
+    });
+
+  async function restoreSession() {
+    const { data, error } = await supabaseClient.auth.getSession();
+
+    if (error || !data.session?.user) return;
+
+    try {
+      await enterAdmin(data.session.user);
+    } catch (adminError) {
+      console.error(adminError);
+      await supabaseClient.auth.signOut();
+      setMessage(loginMessage, adminError.message, true);
+    }
+  }
+
+  restoreSession();
+</script>
+</body>
+</html>
