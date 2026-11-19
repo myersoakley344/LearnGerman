@@ -33,6 +33,7 @@
 
     h1 {
       font-size: 1.4rem;
+      line-height: 1.25;
     }
 
     .card {
@@ -107,11 +108,13 @@
     .row button {
       width: auto;
       min-height: 42px;
+      padding: 8px 12px;
     }
 
     .muted {
       color: #53616f;
       font-size: 0.92rem;
+      overflow-wrap: anywhere;
     }
 
     .item {
@@ -123,6 +126,12 @@
 
     .item h3 {
       margin: 0 0 6px;
+    }
+
+    .item-actions {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
     }
 
     .message {
@@ -139,10 +148,6 @@
     audio {
       width: 100%;
       margin-top: 12px;
-    }
-
-    code {
-      overflow-wrap: anywhere;
     }
   </style>
 </head>
@@ -179,6 +184,7 @@
         <strong>Admin</strong>
         <div id="admin-email" class="muted"></div>
       </div>
+
       <button id="logout-button" class="danger" type="button">
         Sign out
       </button>
@@ -194,6 +200,7 @@
         autocomplete="off"
         placeholder="Enter key for this session"
       >
+
       <p class="muted">
         The key is kept only in this page's memory and is not saved
         to Supabase.
@@ -202,8 +209,27 @@
       <label for="lesson-select">Lesson</label>
       <select id="lesson-select"></select>
 
-      <div id="items-list"></div>
+      <div class="stack" style="margin-top: 12px;">
+        <button
+          id="generate-missing-button"
+          class="primary"
+          type="button"
+        >
+          Generate missing audio
+        </button>
+
+        <button
+          id="regenerate-all-button"
+          class="secondary"
+          type="button"
+        >
+          Regenerate all audio
+        </button>
+      </div>
+
       <div id="admin-message" class="message" role="status"></div>
+      <div id="preview-container"></div>
+      <div id="items-list"></div>
     </section>
   </section>
 </main>
@@ -222,6 +248,7 @@
     "google/gemini-3.8-flash-tts";
 
   const TTS_VOICE = "Kore";
+  const STORAGE_BUCKET = "learn-tts";
 
   const supabaseClient = window.supabase.createClient(
     SUPABASE_URL,
@@ -234,6 +261,7 @@
   let previewBlob = null;
   let previewItemId = null;
   let previewUrl = null;
+  let batchIsRunning = false;
 
   const loginScreen = document.getElementById("login-screen");
   const adminScreen = document.getElementById("admin-screen");
@@ -241,6 +269,8 @@
   const adminMessage = document.getElementById("admin-message");
   const lessonSelect = document.getElementById("lesson-select");
   const itemsList = document.getElementById("items-list");
+  const previewContainer =
+    document.getElementById("preview-container");
 
   function setMessage(element, text, isError = false) {
     element.textContent = text;
@@ -249,6 +279,111 @@
 
   function getApiKey() {
     return document.getElementById("api-key").value.trim();
+  }
+
+  function getCostFromData(data) {
+    if (!data || typeof data !== "object") return null;
+
+    const pricing = data.x_nanogpt_pricing;
+
+    if (pricing && typeof pricing === "object") {
+      const amount = pricing.amount ?? pricing.cost;
+      const value = Number(amount);
+
+      if (Number.isFinite(value)) return value;
+    }
+
+    const usageCost = Number(data.usage?.cost);
+    if (Number.isFinite(usageCost)) return usageCost;
+
+    const directCost = Number(data.cost);
+    if (Number.isFinite(directCost)) return directCost;
+
+    return null;
+  }
+
+  function getCostFromHeaders(headers) {
+    const candidates = [
+      headers.get("x-nanogpt-pricing"),
+      headers.get("x-nanogpt-cost"),
+      headers.get("x-pricing")
+    ].filter(Boolean);
+
+    for (const raw of candidates) {
+      try {
+        const parsed = JSON.parse(raw);
+        const amount = parsed.amount ?? parsed.cost;
+        const value = Number(amount);
+
+        if (Number.isFinite(value)) return value;
+      } catch {
+        const match = raw.match(/-?\d+(?:\.\d+)?/);
+
+        if (match) {
+          const value = Number(match[0]);
+          if (Number.isFinite(value)) return value;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  async function lookupCost(apiKey, requestId) {
+    if (!requestId) return null;
+
+    const url =
+      "https://api.nano-gpt.com/api/v1/usage/requests/" +
+      encodeURIComponent(requestId);
+
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          "x-api-key": apiKey,
+          "Accept": "application/json"
+        }
+      });
+
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      return getCostFromData(data);
+    } catch (error) {
+      console.warn("Could not look up NanoGPT request cost:", error);
+      return null;
+    }
+  }
+
+  async function logTtsUsage({
+    itemId,
+    requestId,
+    status,
+    cost
+  }) {
+    if (!currentUser) return;
+
+    const { error } = await supabaseClient
+      .from("learn_api_usage")
+      .insert({
+        client_request_id: crypto.randomUUID(),
+        user_id: currentUser.id,
+        item_id: itemId || null,
+        provider: "NanoGPT",
+        model_name: TTS_MODEL,
+        operation: "tts",
+        status,
+        estimated_cost: cost,
+        currency: "USD",
+        provider_request_id: requestId || null,
+        pricing_version:
+          "NanoGPT response or usage endpoint; verify against account",
+        completed_at: new Date().toISOString()
+      });
+
+    if (error) {
+      console.error("Could not log TTS request:", error);
+    }
   }
 
   async function verifyAdmin(user) {
@@ -304,8 +439,9 @@
       lessonSelect.appendChild(option);
     }
 
-    if (!lessons.length) {
-      itemsList.replaceChildren();
+    if (lessons.length === 0) {
+      items = [];
+      renderItems();
       setMessage(adminMessage, "No lessons found.", true);
       return;
     }
@@ -327,13 +463,58 @@
 
     if (error) {
       console.error(error);
+      items = [];
+      renderItems();
       setMessage(adminMessage, error.message, true);
       return;
     }
 
     items = data || [];
+    clearPreview();
     renderItems();
     setMessage(adminMessage, "");
+  }
+
+  function getPublicAudioUrl(path) {
+    return supabaseClient
+      .storage
+      .from(STORAGE_BUCKET)
+      .getPublicUrl(path)
+      .data
+      .publicUrl;
+  }
+
+  function clearPreview() {
+    previewBlob = null;
+    previewItemId = null;
+
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      previewUrl = null;
+    }
+
+    previewContainer.replaceChildren();
+  }
+
+  function showPreview(blob, item) {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+
+    previewBlob = blob;
+    previewItemId = item.id;
+    previewUrl = URL.createObjectURL(blob);
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "item";
+
+    const title = document.createElement("strong");
+    title.textContent = `Unsaved preview: ${item.target_de}`;
+
+    const player = document.createElement("audio");
+    player.controls = true;
+    player.src = previewUrl;
+
+    wrapper.append(title, player);
+    previewContainer.replaceChildren(wrapper);
   }
 
   function renderItems() {
@@ -353,26 +534,32 @@
       const status = document.createElement("div");
       status.className = "muted";
       status.textContent = item.tts_audio_path
-        ? `Audio saved: ${item.tts_audio_path}`
+        ? `Saved audio: ${item.tts_audio_path}`
         : "No saved audio.";
 
       const actions = document.createElement("div");
-      actions.className = "stack";
-      actions.style.marginTop = "10px";
+      actions.className = "item-actions";
 
       const generateButton = document.createElement("button");
       generateButton.className = "primary";
       generateButton.type = "button";
       generateButton.textContent = "Generate preview";
-      generateButton.addEventListener("click", () => generatePreview(item));
+      generateButton.disabled = batchIsRunning;
+      generateButton.addEventListener("click", () => {
+        generatePreview(item);
+      });
 
       const saveButton = document.createElement("button");
       saveButton.className = "secondary";
       saveButton.type = "button";
       saveButton.textContent = "Save preview to Supabase";
       saveButton.disabled =
-        !previewBlob || previewItemId !== item.id;
-      saveButton.addEventListener("click", () => savePreview(item));
+        batchIsRunning ||
+        !previewBlob ||
+        previewItemId !== item.id;
+      saveButton.addEventListener("click", () => {
+        savePreview(item);
+      });
 
       actions.append(generateButton, saveButton);
       card.append(title, prompt, status, actions);
@@ -388,68 +575,184 @@
     }
   }
 
-  function getPublicAudioUrl(path) {
-    return supabaseClient
-      .storage
-      .from("learn-tts")
-      .getPublicUrl(path)
-      .data
-      .publicUrl;
+  function setBatchButtonsDisabled(disabled) {
+    document.getElementById(
+      "generate-missing-button"
+    ).disabled = disabled;
+
+    document.getElementById(
+      "regenerate-all-button"
+    ).disabled = disabled;
+
+    lessonSelect.disabled = disabled;
   }
 
-  function costFromHeaders(headers) {
-    const raw =
-      headers.get("x-nanogpt-pricing") ||
-      headers.get("x-nanogpt-cost");
+  async function generateAudio(item, apiKey) {
+    const response = await fetch(TTS_API_URL, {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "Content-Type": "application/json",
+        "Accept": "audio/wav, audio/*, application/json"
+      },
+      body: JSON.stringify({
+        model: TTS_MODEL,
+        input: item.target_de,
+        voice: TTS_VOICE,
+        instructions:
+          "Speak clearly in neutral Standard German as spoken in Germany. " +
+          "Use a natural, calm pronunciation.",
+        response_format: "wav"
+      })
+    });
 
-    if (!raw) return null;
+    const requestId = response.headers.get("x-request-id");
+    let cost = getCostFromHeaders(response.headers);
 
-    try {
-      const parsed = JSON.parse(raw);
-      const amount = parsed.amount ?? parsed.cost;
-      const value = Number(amount);
-      return Number.isFinite(value) ? value : null;
-    } catch {
-      const match = raw.match(/-?\d+(?:\.\d+)?/);
-      if (!match) return null;
+    if (!response.ok) {
+      const errorText = await response.text();
 
-      const value = Number(match[0]);
-      return Number.isFinite(value) ? value : null;
-    }
-  }
+      if (cost === null) {
+        cost = await lookupCost(apiKey, requestId);
+      }
 
-  async function logTtsUsage({
-    requestId,
-    status,
-    cost,
-    errorMessage
-  }) {
-    const lessonId = lessonSelect.value;
-    const itemId = previewItemId;
-
-    const { error } = await supabaseClient
-      .from("learn_api_usage")
-      .insert({
-        client_request_id: crypto.randomUUID(),
-        user_id: currentUser.id,
-        item_id: itemId,
-        provider: "NanoGPT",
-        model_name: TTS_MODEL,
-        operation: "tts",
-        status,
-        estimated_cost: cost,
-        currency: "USD",
-        provider_request_id: requestId || null,
-        pricing_version: "NanoGPT price list; verify against account",
-        completed_at: new Date().toISOString(),
-        // Store only diagnostic text, never the API key.
-        ...(errorMessage
-          ? { input_tokens: null }
-          : {})
+      await logTtsUsage({
+        itemId: item.id,
+        requestId,
+        status: "error",
+        cost
       });
 
-    if (error) {
-      console.error("Could not log TTS request:", error);
+      throw new Error(
+        `NanoGPT HTTP ${response.status}: ${errorText.slice(0, 700)}`
+      );
+    }
+
+    const contentType =
+      (response.headers.get("content-type") || "").toLowerCase();
+
+    if (contentType.includes("application/json")) {
+      const body = await response.json();
+
+      if (cost === null) {
+        cost = getCostFromData(body);
+      }
+
+      if (cost === null) {
+        cost = await lookupCost(apiKey, requestId);
+      }
+
+      await logTtsUsage({
+        itemId: item.id,
+        requestId,
+        status: "error",
+        cost
+      });
+
+      throw new Error(
+        "Expected audio bytes, but NanoGPT returned JSON: " +
+        JSON.stringify(body).slice(0, 700)
+      );
+    }
+
+    const blob = await response.blob();
+
+    if (blob.size === 0) {
+      if (cost === null) {
+        cost = await lookupCost(apiKey, requestId);
+      }
+
+      await logTtsUsage({
+        itemId: item.id,
+        requestId,
+        status: "error",
+        cost
+      });
+
+      throw new Error("NanoGPT returned an empty audio file.");
+    }
+
+    if (cost === null) {
+      cost = await lookupCost(apiKey, requestId);
+    }
+
+    await logTtsUsage({
+      itemId: item.id,
+      requestId,
+      status: "success",
+      cost
+    });
+
+    return blob;
+  }
+
+  async function uploadAudioAndUpdateItem(item, blob) {
+    const lesson = lessons.find(value => value.id === item.lesson_id);
+
+    if (!lesson) {
+      throw new Error("Could not find the item's lesson.");
+    }
+
+    const oldPath = item.tts_audio_path;
+
+    // A unique path prevents a failed regeneration from damaging the
+    // currently saved audio file.
+    const version =
+      new Date().toISOString().replace(/[:.]/g, "-") +
+      "_" +
+      crypto.randomUUID().slice(0, 8);
+
+    const newPath = `${lesson.slug}/${item.id}_${version}.wav`;
+
+    const { error: uploadError } = await supabaseClient
+      .storage
+      .from(STORAGE_BUCKET)
+      .upload(newPath, blob, {
+        contentType: "audio/wav",
+        upsert: false
+      });
+
+    if (uploadError) {
+      throw new Error(`Storage upload failed: ${uploadError.message}`);
+    }
+
+    const { error: updateError } = await supabaseClient
+      .from("learn_items")
+      .update({ tts_audio_path: newPath })
+      .eq("id", item.id);
+
+    if (updateError) {
+      // Keep the old database path intact. Try to remove the newly
+      // uploaded file so it does not become an orphan.
+      await supabaseClient
+        .storage
+        .from(STORAGE_BUCKET)
+        .remove([newPath]);
+
+      throw new Error(
+        `Audio uploaded, but the database update failed: ` +
+        updateError.message
+      );
+    }
+
+    item.tts_audio_path = newPath;
+
+    // Once the new file is saved and referenced, remove the old one.
+    // If deletion fails, the new file remains active; the old file is
+    // only an unused storage object.
+    if (
+      oldPath &&
+      oldPath !== newPath &&
+      !oldPath.includes("://")
+    ) {
+      const { error: removeError } = await supabaseClient
+        .storage
+        .from(STORAGE_BUCKET)
+        .remove([oldPath]);
+
+      if (removeError) {
+        console.warn("Could not remove previous TTS file:", removeError);
+      }
     }
   }
 
@@ -461,184 +764,184 @@
       return;
     }
 
-    if (
-      item.tts_audio_path &&
-      !window.confirm(
-        "This item already has saved audio. Generate a new preview?"
-      )
-    ) {
-      return;
+    if (item.tts_audio_path) {
+      const confirmed = window.confirm(
+        `This item already has saved audio. Generate a new preview for ` +
+        `"${item.target_de}"?`
+      );
+
+      if (!confirmed) return;
     }
 
-    setMessage(adminMessage, `Generating audio for "${item.target_de}"...`);
-
-    previewBlob = null;
-    previewItemId = null;
-
-    const buttons = [...itemsList.querySelectorAll("button")];
-    buttons.forEach(button => {
-      button.disabled = true;
-    });
-
-    let response = null;
+    clearPreview();
+    setMessage(adminMessage, `Generating "${item.target_de}"...`);
 
     try {
-      response = await fetch(TTS_API_URL, {
-        method: "POST",
-        headers: {
-          "x-api-key": apiKey,
-          "Content-Type": "application/json",
-          "Accept": "audio/wav, audio/*, application/json"
-        },
-        body: JSON.stringify({
-          model: TTS_MODEL,
-          input: item.target_de,
-          voice: TTS_VOICE,
-          instructions:
-            "Speak clearly in neutral Standard German as spoken in Germany. " +
-            "Use a natural, calm pronunciation.",
-          response_format: "wav"
-        })
-      });
-
-      const requestId = response.headers.get("x-request-id");
-      const cost = costFromHeaders(response.headers);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-
-        await logTtsUsage({
-          requestId,
-          status: "error",
-          cost,
-          errorMessage: errorText
-        });
-
-        throw new Error(
-          `NanoGPT HTTP ${response.status}: ${errorText.slice(0, 1500)}`
-        );
-      }
-
-      const contentType =
-        (response.headers.get("content-type") || "").toLowerCase();
-
-      if (contentType.includes("application/json")) {
-        const body = await response.json();
-
-        await logTtsUsage({
-          requestId,
-          status: "error",
-          cost,
-          errorMessage: "Expected WAV audio bytes, received JSON."
-        });
-
-        throw new Error(
-          "NanoGPT returned JSON instead of audio: " +
-          JSON.stringify(body).slice(0, 1000)
-        );
-      }
-
-      const blob = await response.blob();
-
-      if (blob.size === 0) {
-        throw new Error("NanoGPT returned an empty audio file.");
-      }
-
-      previewBlob = blob;
-      previewItemId = item.id;
-
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      previewUrl = URL.createObjectURL(blob);
-
-      let player = document.getElementById("preview-player");
-      if (!player) {
-        player = document.createElement("audio");
-        player.id = "preview-player";
-        player.controls = true;
-        player.style.width = "100%";
-        itemsList.before(player);
-      }
-
-      player.src = previewUrl;
-
-      await logTtsUsage({
-        requestId,
-        status: "success",
-        cost,
-        errorMessage: null
-      });
-
+      const blob = await generateAudio(item, apiKey);
+      showPreview(blob, item);
       renderItems();
+
       setMessage(
         adminMessage,
-        `Preview generated for "${item.target_de}". Listen, then save it if it sounds right.`
+        `Preview generated for "${item.target_de}". Listen, then save it.`,
+        false
       );
     } catch (error) {
       console.error(error);
       setMessage(adminMessage, error.message || String(error), true);
-    } finally {
-      renderItems();
     }
   }
 
   async function savePreview(item) {
     if (!previewBlob || previewItemId !== item.id) {
-      setMessage(adminMessage, "Generate a preview for this item first.", true);
-      return;
-    }
-
-    if (
-      item.tts_audio_path &&
-      !window.confirm(
-        "Replace the saved audio for this item?"
-      )
-    ) {
-      return;
-    }
-
-    const lesson = lessons.find(value => value.id === item.lesson_id);
-    const path =
-      `${lesson.slug}/${item.id}.wav`;
-
-    setMessage(adminMessage, `Saving audio for "${item.target_de}"...`);
-
-    const { error: uploadError } = await supabaseClient
-      .storage
-      .from("learn-tts")
-      .upload(path, previewBlob, {
-        contentType: "audio/wav",
-        upsert: true
-      });
-
-    if (uploadError) {
-      console.error(uploadError);
-      setMessage(adminMessage, uploadError.message, true);
-      return;
-    }
-
-    const { error: updateError } = await supabaseClient
-      .from("learn_items")
-      .update({ tts_audio_path: path })
-      .eq("id", item.id);
-
-    if (updateError) {
-      console.error(updateError);
       setMessage(
         adminMessage,
-        `Audio uploaded, but database update failed: ${updateError.message}`,
+        "Generate a preview for this item first.",
         true
       );
       return;
     }
 
-    item.tts_audio_path = path;
+    if (
+      item.tts_audio_path &&
+      !window.confirm(`Replace the saved audio for "${item.target_de}"?`)
+    ) {
+      return;
+    }
+
+    setMessage(adminMessage, `Saving "${item.target_de}"...`);
+
+    try {
+      await uploadAudioAndUpdateItem(item, previewBlob);
+      renderItems();
+      clearPreview();
+
+      setMessage(
+        adminMessage,
+        `Saved audio for "${item.target_de}".`,
+        false
+      );
+    } catch (error) {
+      console.error(error);
+      setMessage(adminMessage, error.message || String(error), true);
+    }
+  }
+
+  async function runBatchGeneration({ onlyMissing }) {
+    const apiKey = getApiKey();
+
+    if (!apiKey) {
+      setMessage(adminMessage, "Enter the NanoGPT API key first.", true);
+      return;
+    }
+
+    const lesson = lessons.find(
+      value => value.id === lessonSelect.value
+    );
+
+    if (!lesson) {
+      setMessage(adminMessage, "Select a lesson first.", true);
+      return;
+    }
+
+    const targets = onlyMissing
+      ? items.filter(item => !item.tts_audio_path)
+      : [...items];
+
+    if (targets.length === 0) {
+      setMessage(
+        adminMessage,
+        onlyMissing
+          ? "All items in this lesson already have saved audio."
+          : "There are no items to generate.",
+        false
+      );
+      return;
+    }
+
+    if (!onlyMissing) {
+      const confirmed = window.confirm(
+        `Regenerate audio for all ${targets.length} items in ` +
+        `"${lesson.title}"? Existing audio will be replaced after each ` +
+        "new file is generated and uploaded successfully."
+      );
+
+      if (!confirmed) return;
+    }
+
+    clearPreview();
+    batchIsRunning = true;
+    setBatchButtonsDisabled(true);
     renderItems();
+
+    let succeeded = 0;
+    const failures = [];
+
+    try {
+      for (let index = 0; index < targets.length; index++) {
+        const item = targets[index];
+
+        setMessage(
+          adminMessage,
+          `Generating ${index + 1} of ${targets.length}: ` +
+          `"${item.target_de}"...`
+        );
+
+        try {
+          const blob = await generateAudio(item, apiKey);
+          await uploadAudioAndUpdateItem(item, blob);
+          succeeded++;
+          renderItems();
+        } catch (error) {
+          console.error(
+            `Generation failed for "${item.target_de}":`,
+            error
+          );
+
+          failures.push({
+            word: item.target_de,
+            message: error.message || String(error)
+          });
+        }
+      }
+    } finally {
+      batchIsRunning = false;
+      setBatchButtonsDisabled(false);
+      renderItems();
+    }
+
+    if (failures.length === 0) {
+      setMessage(
+        adminMessage,
+        `Finished. Generated and saved ${succeeded} audio file(s).`,
+        false
+      );
+      return;
+    }
+
+    const summary = failures
+      .map(failure => `${failure.word}: ${failure.message}`)
+      .join("\n");
+
     setMessage(
       adminMessage,
-      `Saved audio for "${item.target_de}".`,
-      false
+      `Finished with ${succeeded} successful item(s) and ` +
+      `${failures.length} failure(s):\n${summary}`,
+      true
     );
   }
+
+  document
+    .getElementById("generate-missing-button")
+    .addEventListener("click", () => {
+      runBatchGeneration({ onlyMissing: true });
+    });
+
+  document
+    .getElementById("regenerate-all-button")
+    .addEventListener("click", () => {
+      runBatchGeneration({ onlyMissing: false });
+    });
 
   document
     .getElementById("login-form")
@@ -651,6 +954,8 @@
         .value
         .trim()
         .toLowerCase();
+
+      if (!code) return;
 
       const { data, error } = await supabaseClient.auth
         .signInWithPassword({
@@ -674,8 +979,7 @@
     });
 
   lessonSelect.addEventListener("change", async () => {
-    previewBlob = null;
-    previewItemId = null;
+    clearPreview();
     await loadItems(lessonSelect.value);
   });
 
@@ -683,6 +987,7 @@
     .getElementById("logout-button")
     .addEventListener("click", async () => {
       document.getElementById("api-key").value = "";
+      clearPreview();
       await supabaseClient.auth.signOut();
       location.reload();
     });
