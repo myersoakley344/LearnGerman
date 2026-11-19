@@ -825,7 +825,7 @@ async function callHydrogen({ apiKey, item, wavBlob }) {
       model: HYDROGEN_MODEL,
       stream: false,
       temperature: 0,
-      max_tokens: 100,
+      max_tokens: 1024,
       messages: [
         {
           role: "user",
