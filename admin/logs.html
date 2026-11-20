@@ -1,0 +1,1227 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f6f8">
+  <title>LearnGerman – Lernprotokolle</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <style>
+    :root {
+      font-family: system-ui, sans-serif;
+      color: #18212b;
+      background: #f4f6f8;
+      font-size: 16px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 14px;
+    }
+
+    main {
+      width: 100%;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin: 6px 0 14px;
+      font-size: 1.45rem;
+      line-height: 1.25;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 1.05rem;
+    }
+
+    label {
+      display: block;
+      margin: 12px 0 6px;
+      font-weight: 650;
+    }
+
+    input,
+    select,
+    button {
+      width: 100%;
+      min-height: 46px;
+      padding: 10px 12px;
+      border-radius: 9px;
+      font: inherit;
+    }
+
+    input,
+    select {
+      border: 1px solid #b8c2cc;
+      background: #fff;
+    }
+
+    button {
+      border: 0;
+      font-weight: 700;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .primary {
+      color: #fff;
+      background: #1769aa;
+    }
+
+    .secondary {
+      color: #17324a;
+      background: #e5edf4;
+    }
+
+    .danger {
+      color: #fff;
+      background: #6d7781;
+    }
+
+    .card {
+      margin: 12px 0;
+      padding: 16px;
+      background: #fff;
+      border: 1px solid #d9e0e6;
+      border-radius: 14px;
+      box-shadow: 0 2px 8px #1020300d;
+    }
+
+    .stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .filters {
+      display: grid;
+      gap: 10px;
+    }
+
+    .top-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .top-row button {
+      width: auto;
+      min-height: 42px;
+    }
+
+    .muted {
+      color: #53616f;
+      font-size: 0.92rem;
+      overflow-wrap: anywhere;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .summary-box {
+      padding: 10px;
+      text-align: center;
+      background: #f0f4f7;
+      border-radius: 9px;
+    }
+
+    .summary-number {
+      display: block;
+      font-size: 1.25rem;
+      font-weight: 750;
+    }
+
+    .summary-label {
+      display: block;
+      color: #53616f;
+      font-size: 0.78rem;
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin: 12px 0 0;
+    }
+
+    .checkbox-row input {
+      width: 20px;
+      min-height: 20px;
+      margin: 0;
+    }
+
+    .checkbox-row label {
+      margin: 0;
+      font-weight: 500;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .entry {
+      padding: 13px;
+      border: 1px solid #d9e0e6;
+      border-left: 5px solid #8093a5;
+      border-radius: 10px;
+      background: #fff;
+    }
+
+    .entry.event {
+      border-left-color: #4682b4;
+    }
+
+    .entry.attempt {
+      border-left-color: #27844b;
+    }
+
+    .entry.test {
+      border-left-color: #9a6bbb;
+    }
+
+    .entry.api {
+      border-left-color: #d28c2c;
+    }
+
+    .entry-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .entry-title {
+      font-weight: 750;
+      overflow-wrap: anywhere;
+    }
+
+    .entry-time {
+      flex: 0 0 auto;
+      color: #53616f;
+      font-size: 0.82rem;
+      text-align: right;
+    }
+
+    .entry-body {
+      display: grid;
+      gap: 5px;
+      margin-top: 8px;
+      overflow-wrap: anywhere;
+    }
+
+    .entry-line {
+      font-size: 0.93rem;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #edf1f4;
+      font-size: 0.82rem;
+      font-weight: 700;
+    }
+
+    .badge.good {
+      color: #176438;
+      background: #e4f4e9;
+    }
+
+    .badge.warn {
+      color: #825300;
+      background: #fff2d6;
+    }
+
+    .badge.bad {
+      color: #a12626;
+      background: #fde8e8;
+    }
+
+    .audio-wrap {
+      margin-top: 10px;
+    }
+
+    audio {
+      display: block;
+      width: 100%;
+      margin-top: 6px;
+    }
+
+    details {
+      margin-top: 10px;
+    }
+
+    summary {
+      min-height: 32px;
+      padding: 5px 0;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    pre {
+      max-height: 260px;
+      overflow: auto;
+      padding: 10px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      background: #f3f5f7;
+      border-radius: 8px;
+      font-size: 0.82rem;
+    }
+
+    .message {
+      min-height: 24px;
+      margin-top: 10px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    @media (min-width: 620px) {
+      .filters {
+        grid-template-columns: 2fr 1fr 1fr auto;
+        align-items: end;
+      }
+
+      .filters button {
+        min-width: 130px;
+      }
+    }
+
+    @media (max-width: 420px) {
+      .summary {
+        grid-template-columns: 1fr;
+      }
+
+      .entry-header {
+        display: grid;
+      }
+
+      .entry-time {
+        text-align: left;
+      }
+    }
+  </style>
+</head>
+
+<body>
+<main>
+  <section id="login-screen" class="card">
+    <h1>Lernprotokolle</h1>
+    <p class="muted">Mit dem Admin-Zugang anmelden.</p>
+
+    <form id="login-form" class="stack">
+      <div>
+        <label for="access-code">Zugangscode</label>
+        <input
+          id="access-code"
+          type="text"
+          autocomplete="username"
+          autocapitalize="none"
+          required
+        >
+      </div>
+
+      <button class="primary" type="submit">Anmelden</button>
+    </form>
+
+    <div id="login-message" class="message" role="status"></div>
+  </section>
+
+  <section id="admin-screen" class="hidden">
+    <header class="card top-row">
+      <div>
+        <h1>Lernprotokolle</h1>
+        <div id="admin-name" class="muted"></div>
+      </div>
+
+      <button id="logout-button" class="danger" type="button">
+        Abmelden
+      </button>
+    </header>
+
+    <section class="card">
+      <div class="filters">
+        <div>
+          <label for="learner-select">Lernender</label>
+          <select id="learner-select"></select>
+        </div>
+
+        <div>
+          <label for="date-from">Von</label>
+          <input id="date-from" type="date">
+        </div>
+
+        <div>
+          <label for="date-to">Bis</label>
+          <input id="date-to" type="date">
+        </div>
+
+        <button id="refresh-button" class="primary" type="button">
+          Aktualisieren
+        </button>
+      </div>
+
+      <div class="checkbox-row">
+        <input id="show-api" type="checkbox" checked>
+        <label for="show-api">API-Aufrufe anzeigen</label>
+      </div>
+
+      <div id="load-message" class="message" role="status"></div>
+
+      <div id="summary" class="summary hidden">
+        <div class="summary-box">
+          <span id="event-count" class="summary-number">0</span>
+          <span class="summary-label">Ereignisse</span>
+        </div>
+        <div class="summary-box">
+          <span id="attempt-count" class="summary-number">0</span>
+          <span class="summary-label">Aufnahmeversuche</span>
+        </div>
+        <div class="summary-box">
+          <span id="api-cost" class="summary-number">—</span>
+          <span class="summary-label">API-Kostenschätzung</span>
+        </div>
+      </div>
+
+      <div id="timeline" class="timeline"></div>
+    </section>
+  </section>
+</main>
+
+<script>
+  "use strict";
+
+  const SUPABASE_URL =
+    "https://coaiznrxtpdqatvfbsyi.supabase.co";
+
+  const SUPABASE_KEY =
+    "sb_publishable_D0adyb95if5W2IH5WA9JOQ_ENePqpoh";
+
+  const RECORDING_BUCKET = "learn-recordings";
+
+  const supabaseClient = window.supabase.createClient(
+    SUPABASE_URL,
+    SUPABASE_KEY
+  );
+
+  let currentUser = null;
+  let profiles = [];
+  let signedUrlCache = new Map();
+
+  const $ = id => document.getElementById(id);
+
+  function setMessage(element, text, isError = false) {
+    element.textContent = text;
+    element.style.color = isError ? "#a12626" : "#236b37";
+  }
+
+  function localDateString(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  function setDefaultDates() {
+    const today = new Date();
+    const weekAgo = new Date();
+    weekAgo.setDate(today.getDate() - 7);
+
+    $("date-from").value = localDateString(weekAgo);
+    $("date-to").value = localDateString(today);
+  }
+
+  function startOfLocalDate(value) {
+    return new Date(`${value}T00:00:00`).toISOString();
+  }
+
+  function startOfNextLocalDate(value) {
+    const date = new Date(`${value}T00:00:00`);
+    date.setDate(date.getDate() + 1);
+    return date.toISOString();
+  }
+
+  function formatDateTime(value) {
+    if (!value) return "Zeit unbekannt";
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+
+    return new Intl.DateTimeFormat("de-DE", {
+      dateStyle: "short",
+      timeStyle: "medium"
+    }).format(date);
+  }
+
+  function formatDuration(milliseconds) {
+    if (milliseconds == null || !Number.isFinite(Number(milliseconds))) {
+      return "—";
+    }
+
+    const seconds = Number(milliseconds) / 1000;
+    return `${seconds.toFixed(1)} s`;
+  }
+
+  function formatMoney(value, currency = "USD") {
+    if (value == null || !Number.isFinite(Number(value))) return "—";
+
+    return new Intl.NumberFormat("de-DE", {
+      style: "currency",
+      currency,
+      maximumFractionDigits: 6
+    }).format(Number(value));
+  }
+
+  function addText(parent, className, text) {
+    const element = document.createElement("div");
+    element.className = className;
+    element.textContent = text;
+    parent.appendChild(element);
+    return element;
+  }
+
+  function addDetails(parent, label, value) {
+    if (value == null || value === "") return;
+
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = label;
+
+    const pre = document.createElement("pre");
+    pre.textContent = typeof value === "string"
+      ? value
+      : JSON.stringify(value, null, 2);
+
+    details.append(summary, pre);
+    parent.appendChild(details);
+  }
+
+  async function getAdminProfile(user) {
+    const { data, error } = await supabaseClient
+      .from("learn_profiles")
+      .select("id, display_name, role")
+      .eq("id", user.id)
+      .single();
+
+    if (error) throw error;
+    if (data.role !== "admin") {
+      throw new Error("Dieses Konto hat keine Admin-Rolle.");
+    }
+
+    return data;
+  }
+
+  async function signIn(code) {
+    const normalizedCode = code.trim().toLowerCase();
+
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
+      email: `${normalizedCode}@malagasy.local`,
+      password: normalizedCode
+    });
+
+    if (error) throw error;
+
+    try {
+      await enterAdmin(data.user);
+    } catch (error) {
+      await supabaseClient.auth.signOut();
+      throw error;
+    }
+  }
+
+  async function enterAdmin(user) {
+    const profile = await getAdminProfile(user);
+
+    currentUser = user;
+    $("login-screen").classList.add("hidden");
+    $("admin-screen").classList.remove("hidden");
+    $("admin-name").textContent =
+      profile.display_name || user.email || "";
+
+    await loadProfiles();
+  }
+
+  async function loadProfiles() {
+    setMessage($("load-message"), "Lernende werden geladen …");
+
+    const { data, error } = await supabaseClient
+      .from("learn_profiles")
+      .select("id, display_name, role")
+      .eq("role", "learner")
+      .order("display_name");
+
+    if (error) {
+      console.error(error);
+      setMessage($("load-message"), error.message, true);
+      return;
+    }
+
+    profiles = data || [];
+    const select = $("learner-select");
+    select.replaceChildren();
+
+    for (const profile of profiles) {
+      const option = document.createElement("option");
+      option.value = profile.id;
+      option.textContent = profile.display_name;
+      select.appendChild(option);
+    }
+
+    if (!profiles.length) {
+      setMessage($("load-message"), "Keine Lernenden-Profile gefunden.", true);
+      return;
+    }
+
+    await loadLearnerLog();
+  }
+
+  function rangeForQuery(query, column, from, to) {
+    if (from) query = query.gte(column, startOfLocalDate(from));
+    if (to) query = query.lt(column, startOfNextLocalDate(to));
+    return query;
+  }
+
+  async function loadLearnerLog() {
+    const userId = $("learner-select").value;
+    if (!userId) return;
+
+    const from = $("date-from").value;
+    const to = $("date-to").value;
+
+    if (from && to && from > to) {
+      setMessage($("load-message"), "Das Startdatum liegt nach dem Enddatum.", true);
+      return;
+    }
+
+    $("timeline").replaceChildren();
+    $("summary").classList.add("hidden");
+    setMessage($("load-message"), "Protokolle werden geladen …");
+    signedUrlCache = new Map();
+
+    let eventQuery = supabaseClient
+      .from("learn_events")
+      .select(
+        "id, user_id, lesson_id, item_id, test_run_id, event_type, " +
+        "client_time, payload, created_at"
+      )
+      .eq("user_id", userId);
+
+    eventQuery = rangeForQuery(
+      eventQuery,
+      "created_at",
+      from,
+      to
+    );
+
+    let attemptQuery = supabaseClient
+      .from("learn_attempts")
+      .select(
+        "id, user_id, item_id, test_run_id, mode, attempt_number, " +
+        "client_started_at, prompt_finished_at, speech_started_at, " +
+        "recording_finished_at, reaction_time_ms, response_duration_ms, " +
+        "used_translation, used_tts_audio, skipped, stt_transcript, " +
+        "target_word_recognized, phoneme_transcription, phoneme_score, " +
+        "final_score, audio_path, evaluation_status, model_name, " +
+        "model_version, evaluation_error, created_at"
+      )
+      .eq("user_id", userId);
+
+    attemptQuery = rangeForQuery(
+      attemptQuery,
+      "created_at",
+      from,
+      to
+    );
+
+    let testQuery = supabaseClient
+      .from("learn_test_runs")
+      .select(
+        "id, user_id, lesson_id, status, started_at, completed_at, " +
+        "final_score, final_reward_eur, created_at"
+      )
+      .eq("user_id", userId);
+
+    testQuery = rangeForQuery(
+      testQuery,
+      "started_at",
+      from,
+      to
+    );
+
+    const queries = [
+      eventQuery.order("created_at", { ascending: false }).limit(1000),
+      attemptQuery.order("created_at", { ascending: false }).limit(1000),
+      testQuery.order("started_at", { ascending: false }).limit(500)
+    ];
+
+    if ($("show-api").checked) {
+      let apiQuery = supabaseClient
+        .from("learn_api_usage")
+        .select(
+          "id, user_id, attempt_id, item_id, provider, model_name, " +
+          "operation, status, input_tokens, output_tokens, " +
+          "audio_duration_ms, estimated_cost, currency, " +
+          "provider_request_id, started_at, completed_at, created_at"
+        )
+        .eq("user_id", userId);
+
+      apiQuery = rangeForQuery(apiQuery, "created_at", from, to);
+      queries.push(
+        apiQuery.order("created_at", { ascending: false }).limit(1000)
+      );
+    }
+
+    const results = await Promise.all(queries);
+    const names = ["events", "attempts", "test runs", "API usage"];
+    const errors = [];
+
+    results.forEach((result, index) => {
+      if (result.error) {
+        console.error(`Could not load ${names[index]}:`, result.error);
+        errors.push(`${names[index]}: ${result.error.message}`);
+      }
+    });
+
+    const events = results[0].data || [];
+    const attempts = results[1].data || [];
+    const testRuns = results[2].data || [];
+    const apiUsage = $("show-api").checked
+      ? (results[3]?.data || [])
+      : [];
+
+    const allItemIds = new Set();
+
+    for (const event of events) {
+      if (event.item_id) allItemIds.add(event.item_id);
+    }
+
+    for (const attempt of attempts) {
+      if (attempt.item_id) allItemIds.add(attempt.item_id);
+    }
+
+    for (const usage of apiUsage) {
+      if (usage.item_id) allItemIds.add(usage.item_id);
+    }
+
+    const itemMap = await loadItemsForAdmin([...allItemIds], errors);
+    const entries = [];
+
+    for (const event of events) {
+      entries.push({
+        type: "event",
+        timestamp: event.client_time || event.created_at,
+        sortTimestamp: event.created_at,
+        data: event
+      });
+    }
+
+    for (const attempt of attempts) {
+      entries.push({
+        type: "attempt",
+        timestamp: attempt.created_at,
+        sortTimestamp: attempt.created_at,
+        data: attempt
+      });
+    }
+
+    for (const testRun of testRuns) {
+      entries.push({
+        type: "test",
+        timestamp: testRun.started_at,
+        sortTimestamp: testRun.started_at,
+        data: testRun
+      });
+    }
+
+    for (const usage of apiUsage) {
+      entries.push({
+        type: "api",
+        timestamp: usage.created_at,
+        sortTimestamp: usage.created_at,
+        data: usage
+      });
+    }
+
+    entries.sort((a, b) =>
+      new Date(b.sortTimestamp || 0) -
+      new Date(a.sortTimestamp || 0)
+    );
+
+    updateSummary(events, attempts, apiUsage);
+    await renderTimeline(entries, itemMap);
+
+    if (errors.length) {
+      setMessage(
+        $("load-message"),
+        "Einige Daten konnten nicht geladen werden:\n" +
+        errors.join("\n"),
+        true
+      );
+    } else if (!entries.length) {
+      setMessage(
+        $("load-message"),
+        "Für diesen Zeitraum wurden noch keine Einträge gefunden."
+      );
+    } else {
+      setMessage(
+        $("load-message"),
+        `${entries.length} Protokolleinträge geladen.`
+      );
+    }
+  }
+
+  async function loadItemsForAdmin(itemIds, errors) {
+    const itemMap = new Map();
+    if (!itemIds.length) return itemMap;
+
+    const { data, error } = await supabaseClient
+      .from("learn_items")
+      .select("id, lesson_id, order_index, prompt_mg, target_de")
+      .in("id", itemIds);
+
+    if (error) {
+      console.error("Could not load item labels:", error);
+      errors.push(`Item-Texte: ${error.message}`);
+      return itemMap;
+    }
+
+    for (const item of data || []) {
+      itemMap.set(item.id, item);
+    }
+
+    return itemMap;
+  }
+
+  function updateSummary(events, attempts, apiUsage) {
+    $("event-count").textContent = String(events.length);
+    $("attempt-count").textContent = String(attempts.length);
+
+    const costsByCurrency = new Map();
+
+    for (const usage of apiUsage) {
+      if (usage.estimated_cost == null) continue;
+
+      const currency = usage.currency || "USD";
+      const previous = costsByCurrency.get(currency) || 0;
+      costsByCurrency.set(
+        currency,
+        previous + Number(usage.estimated_cost)
+      );
+    }
+
+    const costText = [...costsByCurrency.entries()]
+      .map(([currency, amount]) => formatMoney(amount, currency))
+      .join(" + ");
+
+    $("api-cost").textContent = costText || "—";
+    $("summary").classList.remove("hidden");
+  }
+
+  function eventTitle(event) {
+    const titles = {
+      lesson_opened: "Lektion geöffnet",
+      item_shown: "Wort angezeigt",
+      translation_revealed: "Deutsche Übersetzung eingeblendet",
+      tts_played: "Deutsches Audio abgespielt",
+      recording_started: "Aufnahme gestartet",
+      recording_stopped: "Aufnahme beendet",
+      item_skipped: "Wort übersprungen",
+      item_repeated: "Wort wiederholt",
+      test_started: "Test gestartet",
+      test_abandoned: "Test abgebrochen",
+      test_completed: "Test abgeschlossen",
+      payout_calculated: "Gutschrift berechnet"
+    };
+
+    return titles[event.event_type] || event.event_type;
+  }
+
+  function itemLabel(item) {
+    if (!item) return "Unbekanntes Item";
+
+    return `${item.prompt_mg} → ${item.target_de}`;
+  }
+
+  function makeEntryCard(type, timestamp, title) {
+    const card = document.createElement("article");
+    card.className = `entry ${type}`;
+
+    const header = document.createElement("div");
+    header.className = "entry-header";
+
+    const titleElement = document.createElement("div");
+    titleElement.className = "entry-title";
+    titleElement.textContent = title;
+
+    const timeElement = document.createElement("div");
+    timeElement.className = "entry-time";
+    timeElement.textContent = formatDateTime(timestamp);
+
+    header.append(titleElement, timeElement);
+
+    const body = document.createElement("div");
+    body.className = "entry-body";
+
+    card.append(header, body);
+
+    return { card, body };
+  }
+
+  async function renderTimeline(entries, itemMap) {
+    const timeline = $("timeline");
+    timeline.replaceChildren();
+
+    const audioPaths = new Set(
+      entries
+        .filter(entry =>
+          entry.type === "attempt" &&
+          entry.data.audio_path
+        )
+        .map(entry => entry.data.audio_path)
+    );
+
+    await Promise.all(
+      [...audioPaths].map(async path => {
+        const { data, error } = await supabaseClient
+          .storage
+          .from(RECORDING_BUCKET)
+          .createSignedUrl(path, 60 * 60);
+
+        if (error) {
+          console.error("Could not sign recording URL:", path, error);
+          signedUrlCache.set(path, null);
+          return;
+        }
+
+        signedUrlCache.set(path, data.signedUrl);
+      })
+    );
+
+    for (const entry of entries) {
+      if (entry.type === "event") {
+        renderEvent(entry.data, itemMap);
+      } else if (entry.type === "attempt") {
+        renderAttempt(entry.data, itemMap);
+      } else if (entry.type === "test") {
+        renderTestRun(entry.data);
+      } else if (entry.type === "api") {
+        renderApiUsage(entry.data, itemMap);
+      }
+    }
+  }
+
+  function renderEvent(event, itemMap) {
+    const item = event.item_id
+      ? itemMap.get(event.item_id)
+      : null;
+
+    const title = eventTitle(event);
+    const { card, body } = makeEntryCard(
+      "event",
+      event.client_time || event.created_at,
+      title
+    );
+
+    if (item) addText(body, "entry-line", itemLabel(item));
+
+    if (event.test_run_id) {
+      addText(body, "entry-line muted", `Test-ID: ${event.test_run_id}`);
+    }
+
+    const payload = event.payload || {};
+    const usefulPayload = { ...payload };
+
+    if (usefulPayload.lessonId) {
+      addText(body, "entry-line muted", `Lektion-ID: ${usefulPayload.lessonId}`);
+      delete usefulPayload.lessonId;
+    }
+
+    addDetails(body, "Zusätzliche Ereignisdaten", usefulPayload);
+    $("timeline").appendChild(card);
+  }
+
+  function renderAttempt(attempt, itemMap) {
+    const item = itemMap.get(attempt.item_id);
+    const title = attempt.mode === "test"
+      ? "Testantwort"
+      : "Übungsaufnahme";
+
+    const { card, body } = makeEntryCard(
+      "attempt",
+      attempt.created_at,
+      title
+    );
+
+    addText(body, "entry-line", itemLabel(item));
+    addText(
+      body,
+      "entry-line muted",
+      `Versuch ${attempt.attempt_number ?? "—"} · ` +
+      `Status: ${attempt.evaluation_status || "unbekannt"}`
+    );
+
+    if (attempt.stt_transcript) {
+      addText(
+        body,
+        "entry-line",
+        `Whisper-Transkript: „${attempt.stt_transcript}“`
+      );
+    }
+
+    if (attempt.target_word_recognized !== null) {
+      const recognized = attempt.target_word_recognized;
+      addText(
+        body,
+        "entry-line",
+        `Zielwort erkannt: ${recognized ? "Ja" : "Nein"}`
+      );
+    }
+
+    if (attempt.phoneme_transcription) {
+      addText(
+        body,
+        "entry-line",
+        `Erkannte Lautfolge: ${attempt.phoneme_transcription}`
+      );
+    }
+
+    if (attempt.phoneme_score !== null) {
+      addText(
+        body,
+        "entry-line",
+        `Lautfolgen-Score: ${attempt.phoneme_score}`
+      );
+    }
+
+    if (attempt.final_score !== null) {
+      const score = Number(attempt.final_score);
+      const badge = document.createElement("span");
+      badge.className = "badge " +
+        (score >= 1 ? "good" : score > 0 ? "warn" : "bad");
+      badge.textContent = `Score: ${score}`;
+      body.appendChild(badge);
+    }
+
+    addText(
+      body,
+      "entry-line muted",
+      `Reaktionszeit: ${formatDuration(attempt.reaction_time_ms)} · ` +
+      `Aufnahmedauer: ${formatDuration(attempt.response_duration_ms)}`
+    );
+
+    addText(
+      body,
+      "entry-line muted",
+      `Deutsche Lösung eingeblendet: ${attempt.used_translation ? "Ja" : "Nein"} · ` +
+      `TTS angehört: ${attempt.used_tts_audio ? "Ja" : "Nein"}`
+    );
+
+    if (attempt.model_name) {
+      addText(body, "entry-line muted", `Modelle: ${attempt.model_name}`);
+    }
+
+    if (attempt.evaluation_error) {
+      addText(
+        body,
+        "entry-line",
+        `Auswertungsfehler: ${attempt.evaluation_error}`
+      );
+    }
+
+    if (attempt.audio_path) {
+      const url = signedUrlCache.get(attempt.audio_path);
+
+      if (url) {
+        const audioWrap = document.createElement("div");
+        audioWrap.className = "audio-wrap";
+
+        const label = document.createElement("div");
+        label.className = "muted";
+        label.textContent = "Aufnahme des Lernenden";
+
+        const audio = document.createElement("audio");
+        audio.controls = true;
+        audio.preload = "none";
+        audio.src = url;
+
+        audioWrap.append(label, audio);
+        body.appendChild(audioWrap);
+      } else {
+        addText(
+          body,
+          "entry-line muted",
+          "Aufnahme nicht verfügbar oder Zugriff fehlgeschlagen."
+        );
+      }
+    }
+
+    addDetails(body, "Technische Versuchsdaten", attempt);
+    $("timeline").appendChild(card);
+  }
+
+  function renderTestRun(testRun) {
+    const { card, body } = makeEntryCard(
+      "test",
+      testRun.started_at,
+      `Testdurchgang: ${testRun.status}`
+    );
+
+    addText(body, "entry-line muted", `Test-ID: ${testRun.id}`);
+
+    if (testRun.completed_at) {
+      addText(
+        body,
+        "entry-line muted",
+        `Abgeschlossen: ${formatDateTime(testRun.completed_at)}`
+      );
+    }
+
+    if (testRun.final_score !== null) {
+      addText(body, "entry-line", `Endscore: ${testRun.final_score}`);
+    }
+
+    if (testRun.final_reward_eur !== null) {
+      addText(
+        body,
+        "entry-line",
+        `Endgültiger Betrag: ${formatMoney(testRun.final_reward_eur, "EUR")}`
+      );
+    }
+
+    $("timeline").appendChild(card);
+  }
+
+  function renderApiUsage(usage, itemMap) {
+    const item = usage.item_id
+      ? itemMap.get(usage.item_id)
+      : null;
+
+    const title =
+      `API-Aufruf: ${usage.operation} · ${usage.status}`;
+
+    const { card, body } = makeEntryCard(
+      "api",
+      usage.created_at,
+      title
+    );
+
+    if (item) addText(body, "entry-line", itemLabel(item));
+
+    addText(
+      body,
+      "entry-line muted",
+      `${usage.provider || "Provider unbekannt"} · ` +
+      `${usage.model_name || "Modell unbekannt"}`
+    );
+
+    if (usage.estimated_cost !== null) {
+      addText(
+        body,
+        "entry-line",
+        `Kostenschätzung: ${formatMoney(
+          usage.estimated_cost,
+          usage.currency || "USD"
+        )}`
+      );
+    }
+
+    if (usage.input_tokens !== null || usage.output_tokens !== null) {
+      addText(
+        body,
+        "entry-line muted",
+        `Tokens: ${usage.input_tokens ?? "—"} Input / ` +
+        `${usage.output_tokens ?? "—"} Output`
+      );
+    }
+
+    if (usage.audio_duration_ms !== null) {
+      addText(
+        body,
+        "entry-line muted",
+        `Audio: ${formatDuration(usage.audio_duration_ms)}`
+      );
+    }
+
+    if (usage.provider_request_id) {
+      addText(
+        body,
+        "entry-line muted",
+        `Provider Request-ID: ${usage.provider_request_id}`
+      );
+    }
+
+    $("timeline").appendChild(card);
+  }
+
+  $("login-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    setMessage($("login-message"), "Anmeldung läuft …");
+
+    try {
+      await signIn($("access-code").value);
+      setMessage($("login-message"), "");
+    } catch (error) {
+      console.error(error);
+      setMessage(
+        $("login-message"),
+        error.message || "Anmeldung fehlgeschlagen.",
+        true
+      );
+    }
+  });
+
+  $("refresh-button").addEventListener("click", loadLearnerLog);
+  $("learner-select").addEventListener("change", loadLearnerLog);
+  $("show-api").addEventListener("change", loadLearnerLog);
+
+  $("logout-button").addEventListener("click", async () => {
+    await supabaseClient.auth.signOut();
+    location.reload();
+  });
+
+  async function restoreSession() {
+    const { data, error } = await supabaseClient.auth.getSession();
+
+    if (error || !data.session?.user) return;
+
+    try {
+      await enterAdmin(data.session.user);
+    } catch (adminError) {
+      console.error(adminError);
+      await supabaseClient.auth.signOut();
+      setMessage(
+        $("login-message"),
+        adminError.message || "Adminzugriff nicht möglich.",
+        true
+      );
+    }
+  }
+
+  setDefaultDates();
+  restoreSession();
+</script>
+</body>
+</html>
