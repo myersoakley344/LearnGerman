@@ -623,7 +623,7 @@ async function finishRecording() {
     evaluation_status: evaluationStatus,
     evaluation_error: errors.length ? errors.join("\n") : null,
     model_name: `${whisperModel} + ${PRONUNCIATION_MODEL}`,
-    model_version: "NanoGPT API; reasoning_effort=low; max_tokens=64"
+    model_version: "NanoGPT API; reasoning_effort=low; max_tokens=1024"
   };
 
   const { data: attemptData, error: attemptInsertError } =
