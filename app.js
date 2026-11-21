@@ -8,9 +8,9 @@ const SUPABASE_KEY =
 
 const NANO_API_BASE = "https://api.nano-gpt.com/api/v1";
 const WHISPER_ENDPOINT = `${NANO_API_BASE}/audio/transcriptions`;
-const HYDROGEN_ENDPOINT = `${NANO_API_BASE}/chat/completions`;
+const PRONUNCIATION_ENDPOINT = `${NANO_API_BASE}/chat/completions`;
 
-const HYDROGEN_MODEL = "google/gemini-4-hydrogen";
+const PRONUNCIATION_MODEL = "google/gemini-4-hydrogen";
 const RECORDING_BUCKET = "learn-recordings";
 const TTS_BUCKET = "learn-tts";
 
@@ -541,25 +541,27 @@ async function finishRecording() {
     wavBlob
   });
 
-  const hydrogenPromise = callHydrogen({
+  const pronunciationPromise = callPronunciationModel({
     apiKey,
     item,
     wavBlob
   });
 
-  const [uploadResult, whisperResult, hydrogenResult] =
+  const [uploadResult, whisperResult, pronunciationResult] =
     await Promise.allSettled([
       uploadPromise,
       whisperPromise,
-      hydrogenPromise
+      pronunciationPromise
     ]);
 
   const uploadSucceeded = uploadResult.status === "fulfilled";
   const whisperSucceeded = whisperResult.status === "fulfilled";
-  const hydrogenSucceeded = hydrogenResult.status === "fulfilled";
+  const pronunciationSucceeded =
+    pronunciationResult.status === "fulfilled";
 
   const whisper = whisperSucceeded ? whisperResult.value : null;
-  const hydrogen = hydrogenSucceeded ? hydrogenResult.value : null;
+  const pronunciation =
+    pronunciationSucceeded ? pronunciationResult.value : null;
 
   let finalScore = null;
   let recognized = null;
@@ -567,14 +569,14 @@ async function finishRecording() {
   let evaluationStatus = "complete";
   const errors = [];
 
-  if (whisperSucceeded && hydrogenSucceeded) {
+  if (whisperSucceeded && pronunciationSucceeded) {
     recognized =
       normalizeWord(whisper.text) === normalizeWord(item.target_de);
 
-    phonemeScore = hydrogen.match ? 1 : 0;
+    phonemeScore = pronunciation.match ? 1 : 0;
     finalScore = !recognized
       ? 0
-      : hydrogen.match
+      : pronunciation.match
         ? 1
         : 0.75;
   } else {
@@ -584,8 +586,10 @@ async function finishRecording() {
       errors.push(`Whisper: ${errorText(whisperResult.reason)}`);
     }
 
-    if (!hydrogenSucceeded) {
-      errors.push(`Hydrogen: ${errorText(hydrogenResult.reason)}`);
+    if (!pronunciationSucceeded) {
+      errors.push(
+        `Pronunciation: ${errorText(pronunciationResult.reason)}`
+      );
     }
   }
 
@@ -612,14 +616,14 @@ async function finishRecording() {
     used_tts_audio: usedAudioForCurrentItem,
     stt_transcript: whisper?.text || null,
     target_word_recognized: recognized,
-    phoneme_transcription: hydrogen?.ipa || null,
+    phoneme_transcription: pronunciation?.ipa || null,
     phoneme_score: phonemeScore,
     final_score: finalScore,
     audio_path: uploadSucceeded ? audioPath : null,
     evaluation_status: evaluationStatus,
     evaluation_error: errors.length ? errors.join("\n") : null,
-    model_name: `${whisperModel} + ${HYDROGEN_MODEL}`,
-    model_version: "NanoGPT API"
+    model_name: `${whisperModel} + ${PRONUNCIATION_MODEL}`,
+    model_version: "NanoGPT API; reasoning_effort=low; max_tokens=64"
   };
 
   const { data: attemptData, error: attemptInsertError } =
@@ -636,58 +640,32 @@ async function finishRecording() {
 
   const savedAttemptId = attemptData?.id || null;
 
-  if (whisper) {
-    await logApiUsage({
-      requestId: whisper.requestId,
-      attemptId: savedAttemptId,
-      itemId: item.id,
-      operation: "stt",
-      model: whisperModel,
-      status: "success",
-      cost: whisper.cost,
-      audioDurationMs: durationMs
-    });
-  } else {
-    await logApiUsage({
-      requestId: null,
-      attemptId: savedAttemptId,
-      itemId: item.id,
-      operation: "stt",
-      model: whisperModel,
-      status: "error",
-      cost: null,
-      audioDurationMs: durationMs
-    });
-  }
+  await logApiUsage({
+    requestId: whisper?.requestId || null,
+    attemptId: savedAttemptId,
+    itemId: item.id,
+    operation: "stt",
+    model: whisperModel,
+    status: whisper ? "success" : "error",
+    cost: whisper?.cost ?? null,
+    audioDurationMs: durationMs
+  });
 
-  if (hydrogen) {
-    await logApiUsage({
-      requestId: hydrogen.requestId,
-      attemptId: savedAttemptId,
-      itemId: item.id,
-      operation: "phoneme_analysis",
-      model: HYDROGEN_MODEL,
-      status: "success",
-      cost: hydrogen.cost,
-      audioDurationMs: durationMs
-    });
-  } else {
-    await logApiUsage({
-      requestId: null,
-      attemptId: savedAttemptId,
-      itemId: item.id,
-      operation: "phoneme_analysis",
-      model: HYDROGEN_MODEL,
-      status: "error",
-      cost: null,
-      audioDurationMs: durationMs
-    });
-  }
+  await logApiUsage({
+    requestId: pronunciation?.requestId || null,
+    attemptId: savedAttemptId,
+    itemId: item.id,
+    operation: "phoneme_analysis",
+    model: PRONUNCIATION_MODEL,
+    status: pronunciation ? "success" : "error",
+    cost: pronunciation?.cost ?? null,
+    audioDurationMs: durationMs
+  });
 
   showEvaluation({
     item,
     whisper,
-    hydrogen,
+    pronunciation,
     finalScore,
     errors
   });
@@ -759,7 +737,7 @@ async function callWhisper({ apiKey, model, wavBlob }) {
   });
 
   const requestId = response.headers.get("x-request-id");
-  let bodyText = await response.text();
+  const bodyText = await response.text();
 
   if (!response.ok) {
     throw new Error(
@@ -793,28 +771,28 @@ async function callWhisper({ apiKey, model, wavBlob }) {
     text,
     requestId,
     cost,
+    usage: data.usage || null,
     elapsedMs: Math.round(performance.now() - startedAt)
   };
 }
 
-async function callHydrogen({ apiKey, item, wavBlob }) {
+async function callPronunciationModel({ apiKey, item, wavBlob }) {
   const base64Audio = await blobToBase64(wavBlob);
 
   const prompt =
-    "Bewerte die deutsche Aussprache des Audios anhand des Referenztexts. " +
-    "Schritt 1: Bestimme intern aus dem Audio die tatsächlich gesprochene " +
-    "Lautfolge in breiter IPA-Notation, ohne sie am Referenztext auszurichten. " +
-    "Schritt 2: Vergleiche diese Lautfolge mit einer akzeptablen " +
-    "Standardaussprache des Referenztexts. Ein nicht-muttersprachlicher " +
-    "Akzent ist erlaubt, solange die Lautfolge akzeptabel bleibt. " +
-    "Gib match=true nur bei einer hinreichend korrekten Aussprache. " +
+    "Analysiere das Audio in zwei Schritten. " +
+    "1. Bestimme ausschließlich aus dem Audio die tatsächlich gesprochene " +
+    "deutsche Lautfolge in breiter IPA-Notation. " +
+    "2. Vergleiche sie mit einer akzeptablen Standardaussprache des " +
+    "Referenztexts. Akzeptiere normale Akzentvariation, aber nicht deutlich " +
+    "falsche, ausgelassene oder hinzugefügte Laute. " +
     "Antworte ausschließlich als JSON mit den Feldern ipa und match, " +
     "ohne Markdown oder Erklärung. " +
     `Referenztext: ${item.target_de}`;
 
   const startedAt = performance.now();
 
-  const response = await fetch(HYDROGEN_ENDPOINT, {
+  const response = await fetch(PRONUNCIATION_ENDPOINT, {
     method: "POST",
     headers: {
       "x-api-key": apiKey,
@@ -822,10 +800,10 @@ async function callHydrogen({ apiKey, item, wavBlob }) {
       "Accept": "application/json"
     },
     body: JSON.stringify({
-      model: HYDROGEN_MODEL,
+      model: PRONUNCIATION_MODEL,
       stream: false,
-      temperature: 0,
-      max_tokens: 1024,
+      reasoning_effort: "low",
+      max_tokens: 64,
       messages: [
         {
           role: "user",
@@ -862,7 +840,7 @@ async function callHydrogen({ apiKey, item, wavBlob }) {
     data = JSON.parse(bodyText);
   } catch {
     throw new Error(
-      `Hydrogen returned non-JSON: ${bodyText.slice(0, 500)}`
+      `Pronunciation model returned non-JSON: ${bodyText.slice(0, 500)}`
     );
   }
 
@@ -879,8 +857,13 @@ async function callHydrogen({ apiKey, item, wavBlob }) {
 
   const jsonMatch = content.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
+    const notice = data.x_nanogpt_notice
+      ? ` NanoGPT notice: ${data.x_nanogpt_notice}`
+      : "";
+
     throw new Error(
-      `Could not find JSON in Hydrogen response: ${content.slice(0, 500)}`
+      `Could not find JSON in pronunciation response: ` +
+      `${content.slice(0, 500)}.${notice}`
     );
   }
 
@@ -890,12 +873,14 @@ async function callHydrogen({ apiKey, item, wavBlob }) {
     result = JSON.parse(jsonMatch[0]);
   } catch {
     throw new Error(
-      `Invalid Hydrogen JSON: ${jsonMatch[0].slice(0, 500)}`
+      `Invalid pronunciation JSON: ${jsonMatch[0].slice(0, 500)}`
     );
   }
 
   if (typeof result.match !== "boolean") {
-    throw new Error("Hydrogen response is missing boolean field 'match'.");
+    throw new Error(
+      "Pronunciation response is missing boolean field 'match'."
+    );
   }
 
   let cost = costFromHeaders(response.headers);
@@ -909,6 +894,8 @@ async function callHydrogen({ apiKey, item, wavBlob }) {
     match: result.match,
     requestId,
     cost,
+    usage: data.usage || null,
+    notice: data.x_nanogpt_notice || null,
     elapsedMs: Math.round(performance.now() - startedAt)
   };
 }
@@ -947,7 +934,11 @@ async function convertBlobToWav(blob) {
     const outputLength = Math.ceil(inputBuffer.length / ratio);
     const mono = new Float32Array(outputLength);
 
-    for (let channel = 0; channel < inputBuffer.numberOfChannels; channel++) {
+    for (
+      let channel = 0;
+      channel < inputBuffer.numberOfChannels;
+      channel++
+    ) {
       const source = inputBuffer.getChannelData(channel);
 
       for (let index = 0; index < outputLength; index++) {
@@ -1013,7 +1004,7 @@ function writeAscii(view, offset, text) {
 function showEvaluation({
   item,
   whisper,
-  hydrogen,
+  pronunciation,
   finalScore,
   errors
 }) {
@@ -1034,22 +1025,43 @@ function showEvaluation({
 
     addLine(
       `Whisper: "${whisper.text}" — ` +
-      (recognized ? "zielwort erkannt" : "zielwort nicht exakt erkannt")
+      (recognized
+        ? "Zielwort erkannt"
+        : "Zielwort nicht exakt erkannt")
     );
   } else {
     addLine("Whisper: keine verwertbare Transkription.");
   }
 
-  if (hydrogen) {
+  if (pronunciation) {
     addLine(
-      `Hydrogen: ${hydrogen.match ? "Aussprache akzeptiert" : "Aussprache nicht akzeptiert"}`
+      `Argon: ${pronunciation.match
+        ? "Aussprache akzeptiert"
+        : "Aussprache nicht akzeptiert"}`
     );
 
-    if (hydrogen.ipa) {
-      addLine(`Erkannte Lautfolge: ${hydrogen.ipa}`);
+    if (pronunciation.ipa) {
+      addLine(`Erkannte Lautfolge: ${pronunciation.ipa}`);
+    }
+
+    if (pronunciation.usage) {
+      addLine(
+        `Argon-Tokens: ${pronunciation.usage.prompt_tokens ?? "—"} Input / ` +
+        `${pronunciation.usage.completion_tokens ?? "—"} Output`
+      );
+    }
+
+    if (pronunciation.cost !== null) {
+      addLine(
+        `Argon-Kosten: ${Number(pronunciation.cost).toFixed(6)} USD`
+      );
+    }
+
+    if (pronunciation.notice) {
+      addLine(`NanoGPT-Hinweis: ${pronunciation.notice}`);
     }
   } else {
-    addLine("Hydrogen: keine verwertbare Bewertung.");
+    addLine("Argon: keine verwertbare Bewertung.");
   }
 
   if (finalScore !== null) {
