@@ -20,6 +20,7 @@ const supabaseClient = window.supabase.createClient(
 );
 
 let currentUser = null;
+let currentApiKey = null;
 let lessons = [];
 let items = [];
 let currentIndex = 0;
@@ -65,10 +66,59 @@ function normalizeWord(text) {
     .trim();
 }
 
+function getNanoGPTConfig() {
+  const config = window.LEARNGERMAN_CONFIG;
+
+  if (
+    !config ||
+    typeof config.apiKeyPrefix !== "string" ||
+    typeof config.apiKeySuffix !== "string"
+  ) {
+    throw new Error(
+      "NanoGPT-Konfiguration fehlt. Prüfe config.js."
+    );
+  }
+
+  return config;
+}
+
+function parseLoginString(value) {
+  const match = String(value || "")
+    .trim()
+    .match(/^(\d{2})_([A-Za-z0-9]{4})$/);
+
+  if (!match) {
+    throw new Error(
+      "Bitte den Login im Format 01_abcd eingeben."
+    );
+  }
+
+  const participantNumber = match[1];
+  const keyFragment = match[2];
+  const accessCode = `profil_${participantNumber}`;
+  const config = getNanoGPTConfig();
+
+  const apiKey =
+    config.apiKeyPrefix +
+    keyFragment +
+    config.apiKeySuffix;
+
+  if (!apiKey.trim()) {
+    throw new Error("Der zusammengesetzte NanoGPT-Key ist leer.");
+  }
+
+  return {
+    participantNumber,
+    accessCode,
+    apiKey
+  };
+}
+
 function costFromObject(data) {
   if (!data || typeof data !== "object") return null;
 
   const pricing = data.x_nanogpt_pricing;
+
   if (pricing && typeof pricing === "object") {
     const amount = Number(pricing.amount ?? pricing.cost);
     if (Number.isFinite(amount)) return amount;
@@ -98,6 +148,7 @@ function costFromHeaders(headers) {
       if (Number.isFinite(amount)) return amount;
     } catch {
       const match = raw.match(/-?\d+(?:\.\d+)?/);
+
       if (match) {
         const amount = Number(match[0]);
         if (Number.isFinite(amount)) return amount;
@@ -160,6 +211,7 @@ async function logApiUsage({
   model,
   status,
   cost,
+  usage,
   audioDurationMs
 }) {
   const { error } = await supabaseClient
@@ -173,6 +225,18 @@ async function logApiUsage({
       model_name: model,
       operation,
       status,
+      input_tokens:
+        Number.isFinite(Number(usage?.prompt_tokens))
+          ? Number(usage.prompt_tokens)
+          : Number.isFinite(Number(usage?.input_tokens))
+            ? Number(usage.input_tokens)
+            : null,
+      output_tokens:
+        Number.isFinite(Number(usage?.completion_tokens))
+          ? Number(usage.completion_tokens)
+          : Number.isFinite(Number(usage?.output_tokens))
+            ? Number(usage.output_tokens)
+            : null,
       estimated_cost: cost,
       currency: "USD",
       audio_duration_ms: audioDurationMs,
@@ -353,6 +417,7 @@ function revealTranslation() {
 
 async function playTts() {
   const item = currentItem();
+
   if (!item?.tts_audio_path) {
     showMessage("No TTS audio is available for this item.", true);
     return;
@@ -398,9 +463,11 @@ async function startRecording() {
 
   if (!currentItem()) return;
 
-  const apiKey = $("api-key").value.trim();
-  if (!apiKey) {
-    showMessage("Open settings and enter the NanoGPT API key.", true);
+  if (!currentApiKey) {
+    showMessage(
+      "Bitte melde dich mit deinem vollständigen Login-String an.",
+      true
+    );
     return;
   }
 
@@ -419,6 +486,7 @@ async function startRecording() {
     });
 
     const mimeType = chooseRecorderMimeType();
+
     mediaRecorder = new MediaRecorder(
       recordingStream,
       mimeType ? { mimeType } : undefined
@@ -463,10 +531,10 @@ function stopRecording() {
 }
 
 function stopMediaTracks() {
-  if (recordingStream) {
-    recordingStream.getTracks().forEach(track => track.stop());
-    recordingStream = null;
-  }
+  if (!recordingStream) return;
+
+  recordingStream.getTracks().forEach(track => track.stop());
+  recordingStream = null;
 }
 
 async function finishRecording() {
@@ -498,7 +566,10 @@ async function finishRecording() {
     return;
   }
 
-  if (lastRecordingUrl) URL.revokeObjectURL(lastRecordingUrl);
+  if (lastRecordingUrl) {
+    URL.revokeObjectURL(lastRecordingUrl);
+  }
+
   lastRecordingUrl = URL.createObjectURL(sourceBlob);
 
   const recordingPlayer = $("recording-player");
@@ -510,7 +581,6 @@ async function finishRecording() {
   setBusy(true);
   showMessage("Valiny dinihina... / Checking your answer...");
 
-  const apiKey = $("api-key").value.trim();
   const whisperModel = $("whisper-model").value.trim();
   const attemptId = crypto.randomUUID();
 
@@ -536,13 +606,13 @@ async function finishRecording() {
   const uploadPromise = uploadRecording(audioPath, wavBlob);
 
   const whisperPromise = callWhisper({
-    apiKey,
+    apiKey: currentApiKey,
     model: whisperModel,
     wavBlob
   });
 
   const pronunciationPromise = callPronunciationModel({
-    apiKey,
+    apiKey: currentApiKey,
     item,
     wavBlob
   });
@@ -588,7 +658,7 @@ async function finishRecording() {
 
     if (!pronunciationSucceeded) {
       errors.push(
-        `Pronunciation: ${errorText(pronunciationResult.reason)}`
+        `Hydrogen: ${errorText(pronunciationResult.reason)}`
       );
     }
   }
@@ -623,7 +693,8 @@ async function finishRecording() {
     evaluation_status: evaluationStatus,
     evaluation_error: errors.length ? errors.join("\n") : null,
     model_name: `${whisperModel} + ${PRONUNCIATION_MODEL}`,
-    model_version: "NanoGPT API; reasoning_effort=low; max_tokens=1024"
+    model_version:
+      "NanoGPT API; reasoning_effort=low; max_tokens=1024"
   };
 
   const { data: attemptData, error: attemptInsertError } =
@@ -648,6 +719,7 @@ async function finishRecording() {
     model: whisperModel,
     status: whisper ? "success" : "error",
     cost: whisper?.cost ?? null,
+    usage: whisper?.usage ?? null,
     audioDurationMs: durationMs
   });
 
@@ -659,6 +731,7 @@ async function finishRecording() {
     model: PRONUNCIATION_MODEL,
     status: pronunciation ? "success" : "error",
     cost: pronunciation?.cost ?? null,
+    usage: pronunciation?.usage ?? null,
     audioDurationMs: durationMs
   });
 
@@ -763,6 +836,7 @@ async function callWhisper({ apiKey, model, wavBlob }) {
 
   let cost = costFromHeaders(response.headers);
   if (cost === null) cost = costFromObject(data);
+
   if (cost === null) {
     cost = await lookupNanoCost(apiKey, requestId);
   }
@@ -803,7 +877,7 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
       model: PRONUNCIATION_MODEL,
       stream: false,
       reasoning_effort: "low",
-      max_tokens: 64,
+      max_tokens: 1024,
       messages: [
         {
           role: "user",
@@ -840,7 +914,7 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
     data = JSON.parse(bodyText);
   } catch {
     throw new Error(
-      `Pronunciation model returned non-JSON: ${bodyText.slice(0, 500)}`
+      `Hydrogen returned non-JSON: ${bodyText.slice(0, 500)}`
     );
   }
 
@@ -856,13 +930,14 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
   content = String(content || "").trim();
 
   const jsonMatch = content.match(/\{[\s\S]*\}/);
+
   if (!jsonMatch) {
     const notice = data.x_nanogpt_notice
       ? ` NanoGPT notice: ${data.x_nanogpt_notice}`
       : "";
 
     throw new Error(
-      `Could not find JSON in pronunciation response: ` +
+      `Could not find JSON in Hydrogen response: ` +
       `${content.slice(0, 500)}.${notice}`
     );
   }
@@ -873,18 +948,19 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
     result = JSON.parse(jsonMatch[0]);
   } catch {
     throw new Error(
-      `Invalid pronunciation JSON: ${jsonMatch[0].slice(0, 500)}`
+      `Invalid Hydrogen JSON: ${jsonMatch[0].slice(0, 500)}`
     );
   }
 
   if (typeof result.match !== "boolean") {
     throw new Error(
-      "Pronunciation response is missing boolean field 'match'."
+      "Hydrogen response is missing boolean field 'match'."
     );
   }
 
   let cost = costFromHeaders(response.headers);
   if (cost === null) cost = costFromObject(data);
+
   if (cost === null) {
     cost = await lookupNanoCost(apiKey, requestId);
   }
@@ -1035,7 +1111,7 @@ function showEvaluation({
 
   if (pronunciation) {
     addLine(
-      `Argon: ${pronunciation.match
+      `Hydrogen: ${pronunciation.match
         ? "Aussprache akzeptiert"
         : "Aussprache nicht akzeptiert"}`
     );
@@ -1046,14 +1122,16 @@ function showEvaluation({
 
     if (pronunciation.usage) {
       addLine(
-        `Argon-Tokens: ${pronunciation.usage.prompt_tokens ?? "—"} Input / ` +
+        `Hydrogen-Tokens: ` +
+        `${pronunciation.usage.prompt_tokens ?? "—"} Input / ` +
         `${pronunciation.usage.completion_tokens ?? "—"} Output`
       );
     }
 
     if (pronunciation.cost !== null) {
       addLine(
-        `Argon-Kosten: ${Number(pronunciation.cost).toFixed(6)} USD`
+        `Hydrogen-Kosten: ` +
+        `${Number(pronunciation.cost).toFixed(6)} USD`
       );
     }
 
@@ -1061,7 +1139,7 @@ function showEvaluation({
       addLine(`NanoGPT-Hinweis: ${pronunciation.notice}`);
     }
   } else {
-    addLine("Argon: keine verwertbare Bewertung.");
+    addLine("Hydrogen: keine verwertbare Bewertung.");
   }
 
   if (finalScore !== null) {
@@ -1082,19 +1160,27 @@ function showEvaluation({
 
 async function handleLogin(event) {
   event.preventDefault();
+
   $("login-message").textContent = "Checking access code...";
+  currentApiKey = null;
+  $("api-key").value = "";
 
-  const code = $("access-code")
-    .value
-    .trim()
-    .toLowerCase();
+  let parsed;
 
-  if (!code) return;
+  try {
+    parsed = parseLoginString($("access-code").value);
+  } catch (error) {
+    $("login-message").textContent =
+      error.message || "Ungültiger Login-String.";
+    return;
+  }
+
+  const { accessCode, apiKey } = parsed;
 
   const { data, error } = await supabaseClient.auth
     .signInWithPassword({
-      email: `${code}@malagasy.local`,
-      password: code
+      email: `${accessCode}@malagasy.local`,
+      password: accessCode
     });
 
   if (error) {
@@ -1103,10 +1189,16 @@ async function handleLogin(event) {
     return;
   }
 
+  currentApiKey = apiKey;
+  $("api-key").value = apiKey;
+
   try {
     await enterApp(data.user);
+    $("login-message").textContent = "";
   } catch (profileError) {
     console.error(profileError);
+    currentApiKey = null;
+    $("api-key").value = "";
     await supabaseClient.auth.signOut();
     $("login-message").textContent =
       profileError.message || "Could not load learner profile.";
@@ -1160,9 +1252,29 @@ $("skip-button").addEventListener("click", async () => {
 });
 
 $("logout-button").addEventListener("click", async () => {
+  currentApiKey = null;
   $("api-key").value = "";
+
   await supabaseClient.auth.signOut();
   location.reload();
 });
+
+async function restoreSession() {
+  const { data, error } = await supabaseClient.auth.getSession();
+
+  if (error) {
+    console.error(error);
+    return;
+  }
+
+  if (!data.session?.user) return;
+
+  try {
+    await enterApp(data.session.user);
+  } catch (profileError) {
+    console.error(profileError);
+    await supabaseClient.auth.signOut();
+  }
+}
 
 restoreSession();
