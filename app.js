@@ -10,7 +10,7 @@ const NANO_API_BASE = "https://api.nano-gpt.com/api/v1";
 const WHISPER_ENDPOINT = `${NANO_API_BASE}/audio/transcriptions`;
 const PRONUNCIATION_ENDPOINT = `${NANO_API_BASE}/chat/completions`;
 
-const PRONUNCIATION_MODEL = "google/gemini-4-hydrogen";
+const PRONUNCIATION_MODEL = "google/gemini-4-carbon";
 const RECORDING_BUCKET = "learn-recordings";
 const TTS_BUCKET = "learn-tts";
 
