@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="./styles.css">
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./config.js" defer></script>
   <script src="./app.js" defer></script>
 </head>
 
@@ -25,6 +26,7 @@
           type="text"
           autocomplete="username"
           autocapitalize="none"
+          placeholder="01_abcd"
           required
         >
       </div>
@@ -42,7 +44,11 @@
         <div id="item-position" class="muted"></div>
       </div>
 
-      <button id="logout-button" class="small-button secondary" type="button">
+      <button
+        id="logout-button"
+        class="small-button secondary"
+        type="button"
+      >
         Hivoaka
       </button>
     </header>
@@ -100,19 +106,6 @@
     <details class="card settings">
       <summary>Fikirana fanombanana</summary>
 
-      <label for="api-key">NanoGPT API key</label>
-      <input
-        id="api-key"
-        type="password"
-        autocomplete="off"
-        placeholder="Ampidiro ny API key"
-      >
-
-      <p class="muted">
-        Tehirizina ao amin'ny pejy misokatra ihany ny key, fa tsy ao
-        amin'ny Supabase.
-      </p>
-
       <label for="whisper-model">Whisper model ID</label>
       <input
         id="whisper-model"
@@ -120,12 +113,15 @@
         value="openai/whisper-large-v3"
         autocomplete="off"
       >
+
       <p class="muted">
-        Raha tsy eken'ny NanoGPT io model ID io, ovay araka ny ID ao amin'ny
-        NanoGPT model list.
+        Ovay raha tsy eken'ny NanoGPT io model ID io.
       </p>
     </details>
   </section>
+
+  <!-- The updated app.js can put the assembled API key here at runtime. -->
+  <input id="api-key" type="hidden" autocomplete="off">
 </main>
 </body>
 </html>
