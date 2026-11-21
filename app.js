@@ -10,7 +10,7 @@ const NANO_API_BASE = "https://api.nano-gpt.com/api/v1";
 const WHISPER_ENDPOINT = `${NANO_API_BASE}/audio/transcriptions`;
 const PRONUNCIATION_ENDPOINT = `${NANO_API_BASE}/chat/completions`;
 
-const PRONUNCIATION_MODEL = "google/gemini-4-argon";
+const PRONUNCIATION_MODEL = "google/gemini-4-hydrogen";
 const RECORDING_BUCKET = "learn-recordings";
 const TTS_BUCKET = "learn-tts";
 
@@ -72,11 +72,11 @@ function getNanoGPTConfig() {
   if (
     !config ||
     typeof config.apiKeyPrefix !== "string" ||
-    typeof config.apiKeySuffix !== "string"
+    typeof config.apiKeySuffix !== "string" ||
+    !config.profileCodes ||
+    typeof config.profileCodes !== "object"
   ) {
-    throw new Error(
-      "NanoGPT-Konfiguration fehlt. Prüfe config.js."
-    );
+    throw new Error("Konfiguration fehlt. Prüfe config.js.");
   }
 
   return config;
@@ -85,19 +85,29 @@ function getNanoGPTConfig() {
 function parseLoginString(value) {
   const match = String(value || "")
     .trim()
-    .match(/^(\d{2})_([A-Za-z0-9]{4})$/);
+    .match(/^(\d{2})_([A-Za-z0-9]{4})_([A-Za-z0-9]{4})$/);
 
   if (!match) {
     throw new Error(
-      "Bitte den Login im Format 01_abcd eingeben."
+      "Bitte den Login im Format 01_7351_abcd eingeben."
     );
   }
 
   const participantNumber = match[1];
-  const keyFragment = match[2];
-  const accessCode = `profil_${participantNumber}`;
+  const profileCode = match[2];
+  const keyFragment = match[3];
   const config = getNanoGPTConfig();
+  const expectedProfileCode = config.profileCodes[participantNumber];
 
+  if (!expectedProfileCode) {
+    throw new Error("Unbekanntes Teilnehmerprofil.");
+  }
+
+  if (profileCode !== expectedProfileCode) {
+    throw new Error("Profilcode stimmt nicht.");
+  }
+
+  const accessCode = `profil_${participantNumber}`;
   const apiKey =
     config.apiKeyPrefix +
     keyFragment +
@@ -464,10 +474,7 @@ async function startRecording() {
   if (!currentItem()) return;
 
   if (!currentApiKey) {
-    showMessage(
-      "Bitte melde dich mit deinem vollständigen Login-String an.",
-      true
-    );
+    showMessage("Bitte abmelden und erneut mit deinem Login-String anmelden.", true);
     return;
   }
 
@@ -1205,24 +1212,6 @@ async function handleLogin(event) {
   }
 }
 
-async function restoreSession() {
-  const { data, error } = await supabaseClient.auth.getSession();
-
-  if (error) {
-    console.error(error);
-    return;
-  }
-
-  if (!data.session?.user) return;
-
-  try {
-    await enterApp(data.session.user);
-  } catch (profileError) {
-    console.error(profileError);
-    await supabaseClient.auth.signOut();
-  }
-}
-
 $("login-form").addEventListener("submit", handleLogin);
 
 $("lesson-select").addEventListener("change", async event => {
@@ -1258,6 +1247,114 @@ $("logout-button").addEventListener("click", async () => {
   await supabaseClient.auth.signOut();
   location.reload();
 });
+
+async function loadLessons() {
+  showMessage("Loading lessons...");
+
+  const { data, error } = await supabaseClient
+    .from("learn_lessons")
+    .select("id, slug, title, order_index")
+    .eq("is_published", true)
+    .order("order_index");
+
+  if (error) {
+    console.error(error);
+    showMessage(error.message, true);
+    return;
+  }
+
+  lessons = data || [];
+  const select = $("lesson-select");
+  select.replaceChildren();
+
+  for (const lesson of lessons) {
+    const option = document.createElement("option");
+    option.value = lesson.id;
+    option.textContent = lesson.title;
+    select.appendChild(option);
+  }
+
+  if (!lessons.length) {
+    items = [];
+    renderItem();
+    showMessage("No published lessons found.", true);
+    return;
+  }
+
+  await loadItems(lessons[0].id);
+}
+
+async function loadItems(lessonId) {
+  showMessage("Loading lesson...");
+
+  const { data, error } = await supabaseClient
+    .from("learn_learner_items")
+    .select(
+      "id, lesson_id, order_index, prompt_mg, target_de, tts_audio_path"
+    )
+    .eq("lesson_id", lessonId)
+    .order("order_index");
+
+  if (error) {
+    console.error(error);
+    items = [];
+    renderItem();
+    showMessage(error.message, true);
+    return;
+  }
+
+  items = data || [];
+  currentIndex = 0;
+
+  const lesson = lessons.find(item => item.id === lessonId);
+  $("lesson-title").textContent = lesson?.title || "";
+
+  await logEvent("lesson_opened", null, {
+    lessonId,
+    itemCount: items.length
+  });
+
+  showMessage("");
+  renderItem();
+}
+
+function getTtsUrl(path) {
+  if (!path) return null;
+
+  return supabaseClient
+    .storage
+    .from(TTS_BUCKET)
+    .getPublicUrl(path)
+    .data
+    .publicUrl;
+}
+
+async function getProfile(user) {
+  const { data, error } = await supabaseClient
+    .from("learn_profiles")
+    .select("display_name, role")
+    .eq("id", user.id)
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+async function enterApp(user) {
+  const profile = await getProfile(user);
+
+  if (profile.role !== "learner") {
+    throw new Error("This account is not a learner account.");
+  }
+
+  currentUser = user;
+  $("login-screen").classList.add("hidden");
+  $("app-screen").classList.remove("hidden");
+  $("participant-name").textContent =
+    profile.display_name || user.email || "";
+
+  await loadLessons();
+}
 
 async function restoreSession() {
   const { data, error } = await supabaseClient.auth.getSession();
