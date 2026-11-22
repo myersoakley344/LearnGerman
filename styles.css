@@ -216,18 +216,20 @@ summary:focus-visible {
   border-radius: 12px;
 }
 
-/*
- * Im Lektionstest bleibt das Malagasy-Wort vor der Aufnahme unsichtbar.
- * Der Wortzähler steht bereits in #item-position.
- */
-#app-screen:has(#test-abandon-button:not(.hidden))
-  :not(:has(#timer-panel:not(.hidden))) #prompt {
+/* Während eines aktiven Tests Fortschritt und Einzelwort-Status ausblenden. */
+#app-screen:has(#test-abandon-button:not(.hidden)) .progress-box,
+#app-screen:has(#test-abandon-button:not(.hidden)) .word-status-row {
+  display: none !important;
+}
+
+/* Im Test das nächste Wort vor dem Aufnahmebeginn verdecken. */
+#app-screen:has(#test-abandon-button:not(.hidden)) #prompt {
   color: transparent;
   user-select: none;
 }
 
 #app-screen:has(#test-abandon-button:not(.hidden))
-  :not(:has(#timer-panel:not(.hidden))) #prompt::after {
+  #prompt::after {
   position: absolute;
   inset: 0;
   display: grid;
@@ -237,6 +239,35 @@ summary:focus-visible {
   font-size: 1.15rem;
   font-weight: 650;
   content: "Bereit für das nächste Wort";
+}
+
+/* Das Wort wird sichtbar, sobald der Aufnahme-Timer angezeigt wird. */
+#app-screen:has(#test-abandon-button:not(.hidden))
+  :has(#timer-panel:not(.hidden)) #prompt {
+  color: #18212b;
+}
+
+#app-screen:has(#test-abandon-button:not(.hidden))
+  :has(#timer-panel:not(.hidden)) #prompt::after {
+  content: none;
+}
+
+/* Aufnahme-Audioplayer im Test nicht anzeigen. */
+#app-screen:has(#test-abandon-button:not(.hidden))
+  #recording-player {
+  display: none !important;
+}
+
+/* Die alte Hilfetext-Zahl im Test ausblenden; generische Meldung zeigen. */
+#app-screen:has(#test-abandon-button:not(.hidden))
+  :has(#timer-panel:not(.hidden)) #timer-help {
+  font-size: 0;
+}
+
+#app-screen:has(#test-abandon-button:not(.hidden))
+  :has(#timer-panel:not(.hidden)) #timer-help::after {
+  font-size: 0.9rem;
+  content: "Die Aufnahme endet automatisch.";
 }
 
 .translation {
