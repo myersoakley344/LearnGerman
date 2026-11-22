@@ -26,7 +26,7 @@
           type="text"
           autocomplete="username"
           autocapitalize="none"
-          placeholder="01_xyzw_abcd"
+          placeholder="01_7351_abcd"
           required
         >
       </div>
@@ -59,7 +59,26 @@
 
       <div id="lesson-title" class="muted lesson-title"></div>
 
+      <section class="progress-box" aria-live="polite">
+        <strong id="word-check-progress">0 von 0 Wörter bestanden</strong>
+        <div id="test-unlock-status" class="muted"></div>
+      </section>
+
+      <div class="word-status-row">
+        <span id="current-word-status" class="status-badge">
+          Noch nicht erfolgreich getestet
+        </span>
+      </div>
+
       <div id="prompt" class="prompt" aria-live="polite">...</div>
+
+      <div id="timer-panel" class="timer-panel hidden" aria-live="assertive">
+        <div id="timer-label">Aufnahme läuft</div>
+        <div id="timer-countdown">3</div>
+        <div id="timer-help">
+          Sprich das deutsche Wort und tippe vorher auf „Fertig“.
+        </div>
+      </div>
 
       <div class="stack">
         <button id="reveal-button" class="secondary" type="button">
@@ -75,11 +94,15 @@
         <audio id="tts-player" class="hidden" controls></audio>
 
         <button id="record-button" class="primary" type="button">
-          Raketo ny valiny
+          Aufnahme mit Bewertung
+        </button>
+
+        <button id="word-check-button" class="primary" type="button">
+          Zeitbegrenzten Wort-Check starten
         </button>
 
         <button id="stop-button" class="danger hidden" type="button">
-          Atsaharo ny firaketana
+          Fertig
         </button>
 
         <audio id="recording-player" class="hidden" controls></audio>
@@ -113,15 +136,11 @@
         value="openai/whisper-large-v3"
         autocomplete="off"
       >
-
       <p class="muted">
         Ovay raha tsy eken'ny NanoGPT io model ID io.
       </p>
     </details>
   </section>
-
-  <!-- The updated app.js can put the assembled API key here at runtime. -->
-  <input id="api-key" type="hidden" autocomplete="off">
 </main>
 </body>
 </html>
