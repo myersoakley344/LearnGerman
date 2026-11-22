@@ -19,6 +19,12 @@ const TTS_BUCKET = "learn-tts";
 const WORD_CHECK_LIMIT_MS = 2000;
 const REQUIRED_SUCCESSES_PER_WORD = 3;
 
+const AUDIO_SAMPLE_RATE = 16000;
+const SILENCE_WINDOW_MS = 20;
+const SILENCE_PADDING_MS = 120;
+const ABSOLUTE_SPEECH_THRESHOLD = 0.004;
+const RELATIVE_SPEECH_THRESHOLD = 0.08;
+
 const supabaseClient = window.supabase.createClient(
   SUPABASE_URL,
   SUPABASE_KEY
@@ -444,7 +450,6 @@ async function loadLearnerProgress() {
 
 function getRequiredPreparedWords() {
   const count = items.length;
-
   if (count === 0) return 0;
 
   return Math.max(1, count - Math.ceil(count * 0.1));
@@ -475,8 +480,8 @@ function renderProgress() {
       "Voraussetzung für den späteren Gesamttest erfüllt.";
   } else {
     $("test-unlock-status").textContent =
-      `Für einen Wort-Check müssen drei unbeeinflusste Übungserfolge ` +
-      `mit Score 1 erreicht werden. Für den späteren Gesamttest: ` +
+      `Für einen Wort-Check brauchst du drei Übungserfolge mit Score 1 ` +
+      `ohne Übersetzung oder TTS. Für den späteren Gesamttest: ` +
       `${prepared} von ${required} Wörtern ausreichend geübt.`;
   }
 
@@ -515,18 +520,18 @@ function renderCurrentWordStatus() {
 
 function updateWordCheckButton() {
   const item = currentItem();
+
   if (!item) {
     $("word-check-button").disabled = true;
     return;
   }
 
-  const count = practiceSuccessCounts.get(item.id) || 0;
-  const passed = passedWordChecks.has(item.id);
+  const successes = practiceSuccessCounts.get(item.id) || 0;
 
   $("word-check-button").disabled =
     isBusy ||
-    count < REQUIRED_SUCCESSES_PER_WORD ||
-    passed;
+    successes < REQUIRED_SUCCESSES_PER_WORD ||
+    passedWordChecks.has(item.id);
 }
 
 function getTtsUrl(path) {
@@ -730,13 +735,13 @@ async function startWordCheck() {
   }
 
   const item = currentItem();
-  const count = item
+  const successes = item
     ? practiceSuccessCounts.get(item.id) || 0
     : 0;
 
   if (!item || isBusy || mediaRecorder) return;
 
-  if (count < REQUIRED_SUCCESSES_PER_WORD) {
+  if (successes < REQUIRED_SUCCESSES_PER_WORD) {
     showMessage(
       `Für den Wort-Check brauchst du zuerst ` +
       `${REQUIRED_SUCCESSES_PER_WORD} erfolgreiche Übungsversuche.`
@@ -930,10 +935,7 @@ async function finishRecording() {
     return;
   }
 
-  if (lastRecordingUrl) {
-    URL.revokeObjectURL(lastRecordingUrl);
-  }
-
+  if (lastRecordingUrl) URL.revokeObjectURL(lastRecordingUrl);
   lastRecordingUrl = URL.createObjectURL(sourceBlob);
 
   const recordingPlayer = $("recording-player");
@@ -980,10 +982,12 @@ async function evaluateRecording({
     $("whisper-model").value.trim() || WHISPER_DEFAULT_MODEL;
 
   const attemptId = crypto.randomUUID();
-  let wavBlob;
+  let originalWavBlob;
+  let trimmedAudio;
 
   try {
-    wavBlob = await convertBlobToWav(sourceBlob);
+    originalWavBlob = await convertBlobToWav(sourceBlob);
+    trimmedAudio = await trimSilenceFromWav(originalWavBlob);
   } catch (error) {
     console.error(error);
     resetRecordingUi();
@@ -1000,18 +1004,44 @@ async function evaluateRecording({
   const audioPath =
     `${currentUser.id}/${item.lesson_id}/${item.id}/${attemptId}.wav`;
 
+  if (!trimmedAudio.hasSpeech) {
+    await saveNoSpeechAttempt({
+      item,
+      mode,
+      attemptId,
+      attemptNumber,
+      originalWavBlob,
+      audioPath,
+      startedAt,
+      promptTime,
+      durationMs,
+      timeLimitMs,
+      endReason
+    });
+
+    resetRecordingUi();
+    setBusy(false);
+    updateWordCheckButton();
+
+    showMessage(
+      "Keine Sprache erkannt. Bitte sprich näher ans Mikrofon oder etwas lauter und versuche es erneut.",
+      true
+    );
+    return;
+  }
+
   const [uploadResult, whisperResult, pronunciationResult] =
     await Promise.allSettled([
-      uploadRecording(audioPath, wavBlob),
+      uploadRecording(audioPath, originalWavBlob),
       callWhisper({
         apiKey: currentApiKey,
         model: whisperModel,
-        wavBlob
+        wavBlob: trimmedAudio.blob
       }),
       callPronunciationModel({
         apiKey: currentApiKey,
         item,
-        wavBlob
+        wavBlob: trimmedAudio.blob
       })
     ]);
 
@@ -1095,7 +1125,7 @@ async function evaluateRecording({
     evaluation_error: errors.length ? errors.join("\n") : null,
     model_name: `${whisperModel} + ${PRONUNCIATION_MODEL}`,
     model_version:
-      "NanoGPT API; reasoning_effort=low; max_tokens=1024"
+      "NanoGPT API; reasoning_effort=low; max_tokens=1024; edge-trim=v1"
   };
 
   const { data: attemptData, error: attemptInsertError } =
@@ -1121,7 +1151,7 @@ async function evaluateRecording({
     status: whisper ? "success" : "error",
     cost: whisper?.cost ?? null,
     usage: whisper?.usage ?? null,
-    audioDurationMs: durationMs
+    audioDurationMs: trimmedAudio.trimmedDurationMs
   });
 
   await logApiUsage({
@@ -1133,7 +1163,7 @@ async function evaluateRecording({
     status: pronunciation ? "success" : "error",
     cost: pronunciation?.cost ?? null,
     usage: pronunciation?.usage ?? null,
-    audioDurationMs: durationMs
+    audioDurationMs: trimmedAudio.trimmedDurationMs
   });
 
   await loadLearnerProgress();
@@ -1154,7 +1184,7 @@ async function evaluateRecording({
   if (errors.length) {
     showMessage(
       "Technisches Problem bei der Bewertung. " +
-      "Es wurde kein erfolgreicher Wort-Check gespeichert.",
+      "Es wurde kein bestandenes Wort-Check-Ergebnis gespeichert.",
       true
     );
   } else if (mode === "word_check" && finalScore === 1) {
@@ -1173,227 +1203,68 @@ async function evaluateRecording({
   }
 }
 
-function errorText(error) {
-  if (!error) return "Unbekannter Fehler";
-  return error.message || String(error);
-}
+async function saveNoSpeechAttempt({
+  item,
+  mode,
+  attemptId,
+  attemptNumber,
+  originalWavBlob,
+  audioPath,
+  startedAt,
+  promptTime,
+  durationMs,
+  timeLimitMs,
+  endReason
+}) {
+  const { error: uploadError } = await uploadRecording(
+    audioPath,
+    originalWavBlob
+  );
 
-async function getNextAttemptNumber(itemId, mode) {
-  const { count, error } = await supabaseClient
+  const attempt = {
+    client_attempt_id: attemptId,
+    user_id: currentUser.id,
+    item_id: item.id,
+    test_run_id: null,
+    mode,
+    attempt_number: attemptNumber,
+    client_started_at: startedAt
+      ? new Date(startedAt).toISOString()
+      : null,
+    prompt_finished_at: promptTime
+      ? new Date(promptTime).toISOString()
+      : null,
+    response_duration_ms: durationMs,
+    time_limit_ms: timeLimitMs,
+    recording_end_reason: endReason,
+    used_translation: mode === "word_check"
+      ? false
+      : usedTranslationForCurrentItem,
+    used_tts_audio: mode === "word_check"
+      ? false
+      : usedAudioForCurrentItem,
+    final_score: null,
+    audio_path: uploadError ? null : audioPath,
+    evaluation_status: "error",
+    evaluation_error: "No speech detected after edge silence trimming.",
+    model_name: null,
+    model_version: "edge-trim-v1"
+  };
+
+  const { error: insertError } = await supabaseClient
     .from("learn_attempts")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", currentUser.id)
-    .eq("item_id", itemId)
-    .eq("mode", mode);
+    .insert(attempt);
 
-  if (error) {
-    console.warn("Could not count previous attempts:", error);
-    return 1;
+  if (insertError) {
+    console.error("Could not save no-speech attempt:", insertError);
   }
 
-  return (count || 0) + 1;
+  if (uploadError) {
+    console.error("Could not upload no-speech attempt:", uploadError);
+  }
 }
 
-async function uploadRecording(path, blob) {
-  const { error } = await supabaseClient
-    .storage
-    .from(RECORDING_BUCKET)
-    .upload(path, blob, {
-      contentType: "audio/wav",
-      upsert: false
-    });
-
-  if (error) throw error;
-  return path;
-}
-
-async function callWhisper({ apiKey, model, wavBlob }) {
-  const form = new FormData();
-  form.append("model", model);
-  form.append("file", wavBlob, "answer.wav");
-  form.append("language", "de");
-  form.append("response_format", "json");
-
-  const response = await fetch(WHISPER_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "Accept": "application/json"
-    },
-    body: form
-  });
-
-  const requestId = response.headers.get("x-request-id");
-  const bodyText = await response.text();
-
-  if (!response.ok) {
-    throw new Error(
-      `HTTP ${response.status}: ${bodyText.slice(0, 700)}`
-    );
-  }
-
-  let data;
-
-  try {
-    data = JSON.parse(bodyText);
-  } catch {
-    throw new Error(
-      `Whisper-Antwort war kein JSON: ${bodyText.slice(0, 500)}`
-    );
-  }
-
-  const text = String(data.text || "").trim();
-
-  if (!text) {
-    throw new Error("Whisper lieferte kein Transkript.");
-  }
-
-  let cost = costFromHeaders(response.headers);
-  if (cost === null) cost = costFromObject(data);
-  if (cost === null) {
-    cost = await lookupNanoCost(apiKey, requestId);
-  }
-
-  return {
-    text,
-    requestId,
-    cost,
-    usage: data.usage || null
-  };
-}
-
-async function callPronunciationModel({ apiKey, item, wavBlob }) {
-  const base64Audio = await blobToBase64(wavBlob);
-
-  const prompt =
-    "Analysiere das Audio in zwei Schritten. " +
-    "1. Bestimme ausschließlich aus dem Audio die tatsächlich gesprochene " +
-    "deutsche Lautfolge in breiter IPA-Notation. " +
-    "2. Vergleiche sie mit einer akzeptablen Standardaussprache des " +
-    "Referenztexts. Akzeptiere normale Akzentvariation, aber nicht deutlich " +
-    "falsche, ausgelassene oder hinzugefügte Laute. " +
-    "Antworte ausschließlich als JSON mit den Feldern ipa und match, " +
-    "ohne Markdown oder Erklärung. " +
-    `Referenztext: ${item.target_de}`;
-
-  const response = await fetch(PRONUNCIATION_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "Content-Type": "application/json",
-      "Accept": "application/json"
-    },
-    body: JSON.stringify({
-      model: PRONUNCIATION_MODEL,
-      stream: false,
-      reasoning_effort: "low",
-      max_tokens: 1024,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: prompt },
-            {
-              type: "input_audio",
-              input_audio: {
-                data: base64Audio,
-                format: "wav"
-              }
-            }
-          ]
-        }
-      ]
-    })
-  });
-
-  const requestId = response.headers.get("x-request-id");
-  const bodyText = await response.text();
-
-  if (!response.ok) {
-    throw new Error(
-      `HTTP ${response.status}: ${bodyText.slice(0, 700)}`
-    );
-  }
-
-  let data;
-
-  try {
-    data = JSON.parse(bodyText);
-  } catch {
-    throw new Error(
-      `Aussprachemodell lieferte kein JSON: ${bodyText.slice(0, 500)}`
-    );
-  }
-
-  let content = data.choices?.[0]?.message?.content;
-
-  if (Array.isArray(content)) {
-    content = content
-      .filter(part => typeof part?.text === "string")
-      .map(part => part.text)
-      .join("");
-  }
-
-  content = String(content || "").trim();
-
-  const jsonMatch = content.match(/\{[\s\S]*\}/);
-
-  if (!jsonMatch) {
-    const notice = data.x_nanogpt_notice
-      ? ` NanoGPT-Hinweis: ${data.x_nanogpt_notice}`
-      : "";
-
-    throw new Error(
-      `Kein JSON in der Ausspracheantwort gefunden: ` +
-      `${content.slice(0, 500)}.${notice}`
-    );
-  }
-
-  let result;
-
-  try {
-    result = JSON.parse(jsonMatch[0]);
-  } catch {
-    throw new Error(
-      `Ungültiges Aussprache-JSON: ${jsonMatch[0].slice(0, 500)}`
-    );
-  }
-
-  if (typeof result.match !== "boolean") {
-    throw new Error("Antwort enthält kein boolesches Feld 'match'.");
-  }
-
-  let cost = costFromHeaders(response.headers);
-  if (cost === null) cost = costFromObject(data);
-  if (cost === null) {
-    cost = await lookupNanoCost(apiKey, requestId);
-  }
-
-  return {
-    ipa: String(result.ipa || ""),
-    match: result.match,
-    requestId,
-    cost,
-    usage: data.usage || null,
-    notice: data.x_nanogpt_notice || null
-  };
-}
-
-async function blobToBase64(blob) {
-  const buffer = await blob.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  const chunkSize = 0x8000;
-  let binary = "";
-
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    const chunk = bytes.subarray(offset, offset + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-
-  return btoa(binary);
-}
-
-async function convertBlobToWav(blob) {
+async function trimSilenceFromWav(wavBlob) {
   const AudioContextClass =
     window.AudioContext || window.webkitAudioContext;
 
@@ -1404,36 +1275,160 @@ async function convertBlobToWav(blob) {
   const context = new AudioContextClass();
 
   try {
-    const inputBuffer = await context.decodeAudioData(
-      await blob.arrayBuffer()
+    const decoded = await context.decodeAudioData(
+      await wavBlob.arrayBuffer()
     );
 
-    const targetRate = 16000;
-    const ratio = inputBuffer.sampleRate / targetRate;
-    const outputLength = Math.ceil(inputBuffer.length / ratio);
-    const mono = new Float32Array(outputLength);
+    const sampleRate = decoded.sampleRate;
+    const channelCount = decoded.numberOfChannels;
+    const samples = decoded.getChannelData(0);
 
-    for (
-      let channel = 0;
-      channel < inputBuffer.numberOfChannels;
-      channel++
-    ) {
-      const source = inputBuffer.getChannelData(channel);
+    const windowSize = Math.max(
+      1,
+      Math.round(sampleRate * SILENCE_WINDOW_MS / 1000)
+    );
 
-      for (let index = 0; index < outputLength; index++) {
-        const sourcePosition = index * ratio;
-        const left = Math.floor(sourcePosition);
-        const right = Math.min(left + 1, source.length - 1);
-        const fraction = sourcePosition - left;
-        const sample =
-          source[left] * (1 - fraction) +
-          source[right] * fraction;
+    const windowRms = [];
 
-        mono[index] += sample / inputBuffer.numberOfChannels;
+    for (let start = 0; start < samples.length; start += windowSize) {
+      const end = Math.min(start + windowSize, samples.length);
+      let sumSquares = 0;
+
+      for (let index = start; index < end; index++) {
+        const value = samples[index];
+        sumSquares += value * value;
       }
+
+      windowRms.push({
+        start,
+        end,
+        rms: Math.sqrt(sumSquares / Math.max(1, end - start))
+      });
     }
 
-    return encodeWav(mono, targetRate);
+    const peakWindowRms = windowRms.reduce(
+      (peak, window) => Math.max(peak, window.rms),
+      0
+    );
+
+    const threshold = Math.max(
+      ABSOLUTE_SPEECH_THRESHOLD,
+      peakWindowRms * RELATIVE_SPEECH_THRESHOLD
+    );
+
+    const activeWindows = windowRms.filter(
+      window => window.rms >= threshold
+    );
+
+    // Ignore isolated clicks/noise shorter than about 40 ms.
+    if (
+      activeWindows.length < 2 ||
+      peakWindowRms < ABSOLUTE_SPEECH_THRESHOLD
+    ) {
+      return {
+        blob: wavBlob,
+        hasSpeech: false,
+        originalDurationMs:
+          decoded.length / sampleRate * 1000,
+        trimmedDurationMs:
+          decoded.length / sampleRate * 1000,
+        trimStartMs: 0,
+        trimEndMs: 0,
+        threshold
+      };
+    }
+
+    const firstActive = activeWindows[0];
+    const lastActive = activeWindows[activeWindows.length - 1];
+
+    const paddingSamples = Math.round(
+      sampleRate * SILENCE_PADDING_MS / 1000
+    );
+
+    const startSample = Math.max(
+      0,
+      firstActive.start - paddingSamples
+    );
+
+    const endSample = Math.min(
+      decoded.length,
+      lastActive.end + paddingSamples
+    );
+
+    const frameCount = endSample - startSample;
+
+    if (frameCount <= 0) {
+      return {
+        blob: wavBlob,
+        hasSpeech: false,
+        originalDurationMs:
+          decoded.length / sampleRate * 1000,
+        trimmedDurationMs:
+          decoded.length / sampleRate * 1000,
+        trimStartMs: 0,
+        trimEndMs: 0,
+        threshold
+      };
+    }
+
+    const trimmedChannels = [];
+
+    for (let channel = 0; channel < channelCount; channel++) {
+      const source = decoded.getChannelData(channel);
+      trimmedChannels.push(
+        source.slice(startSample, endSample)
+      );
+    }
+
+    const outputLength = Math.max(
+      1,
+      Math.ceil(frameCount * AUDIO_SAMPLE_RATE / sampleRate)
+    );
+
+    const monoOutput = new Float32Array(outputLength);
+
+    for (let outputIndex = 0; outputIndex < outputLength; outputIndex++) {
+      const sourcePosition =
+        outputIndex * sampleRate / AUDIO_SAMPLE_RATE;
+
+      const left = Math.min(
+        Math.floor(sourcePosition),
+        frameCount - 1
+      );
+
+      const right = Math.min(left + 1, frameCount - 1);
+      const fraction = sourcePosition - left;
+      let channelSum = 0;
+
+      for (const channelSamples of trimmedChannels) {
+        channelSum +=
+          channelSamples[left] * (1 - fraction) +
+          channelSamples[right] * fraction;
+      }
+
+      monoOutput[outputIndex] = channelSum / channelCount;
+    }
+
+    const trimmedBlob = encodeWav(
+      monoOutput,
+      AUDIO_SAMPLE_RATE
+    );
+
+    const originalDurationMs =
+      decoded.length / sampleRate * 1000;
+
+    const trimmedDurationMs =
+      outputLength / AUDIO_SAMPLE_RATE * 1000;
+
+    return {
+      blob: trimmedBlob,
+      hasSpeech: true,
+      originalDurationMs,
+      trimmedDurationMs,
+      trimStartMs: startSample / sampleRate * 1000,
+      trimEndMs: (decoded.length - endSample) / sampleRate * 1000,
+      threshold
+    };
   } finally {
     await context.close();
   }
@@ -1785,180 +1780,6 @@ async function blobToBase64(blob) {
   }
 
   return btoa(binary);
-}
-
-async function convertBlobToWav(blob) {
-  const AudioContextClass =
-    window.AudioContext || window.webkitAudioContext;
-
-  if (!AudioContextClass) {
-    throw new Error("Web Audio API ist nicht verfügbar.");
-  }
-
-  const context = new AudioContextClass();
-
-  try {
-    const inputBuffer = await context.decodeAudioData(
-      await blob.arrayBuffer()
-    );
-
-    const targetRate = 16000;
-    const ratio = inputBuffer.sampleRate / targetRate;
-    const outputLength = Math.ceil(inputBuffer.length / ratio);
-    const mono = new Float32Array(outputLength);
-
-    for (
-      let channel = 0;
-      channel < inputBuffer.numberOfChannels;
-      channel++
-    ) {
-      const source = inputBuffer.getChannelData(channel);
-
-      for (let index = 0; index < outputLength; index++) {
-        const sourcePosition = index * ratio;
-        const left = Math.floor(sourcePosition);
-        const right = Math.min(left + 1, source.length - 1);
-        const fraction = sourcePosition - left;
-        const sample =
-          source[left] * (1 - fraction) +
-          source[right] * fraction;
-
-        mono[index] += sample / inputBuffer.numberOfChannels;
-      }
-    }
-
-    return encodeWav(mono, targetRate);
-  } finally {
-    await context.close();
-  }
-}
-
-function encodeWav(samples, sampleRate) {
-  const bytesPerSample = 2;
-  const dataSize = samples.length * bytesPerSample;
-  const buffer = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(buffer);
-
-  writeAscii(view, 0, "RIFF");
-  view.setUint32(4, 36 + dataSize, true);
-  writeAscii(view, 8, "WAVE");
-  writeAscii(view, 12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * bytesPerSample, true);
-  view.setUint16(32, bytesPerSample, true);
-  view.setUint16(34, 16, true);
-  writeAscii(view, 36, "data");
-  view.setUint32(40, dataSize, true);
-
-  let offset = 44;
-
-  for (const sample of samples) {
-    const clipped = Math.max(-1, Math.min(1, sample));
-    const value = clipped < 0
-      ? clipped * 0x8000
-      : clipped * 0x7fff;
-
-    view.setInt16(offset, value, true);
-    offset += 2;
-  }
-
-  return new Blob([buffer], { type: "audio/wav" });
-}
-
-function writeAscii(view, offset, text) {
-  for (let index = 0; index < text.length; index++) {
-    view.setUint8(offset + index, text.charCodeAt(index));
-  }
-}
-
-function showEvaluation({
-  item,
-  whisper,
-  pronunciation,
-  finalScore,
-  errors,
-  mode
-}) {
-  const panel = $("evaluation-panel");
-  const result = $("evaluation-result");
-  result.replaceChildren();
-
-  const addLine = text => {
-    const div = document.createElement("div");
-    div.className = "evaluation-line";
-    div.textContent = text;
-    result.appendChild(div);
-  };
-
-  if (whisper) {
-    const recognized =
-      normalizeWord(whisper.text) === normalizeWord(item.target_de);
-
-    addLine(
-      `Whisper: "${whisper.text}" — ` +
-      (recognized ? "Zielwort erkannt" : "Zielwort nicht exakt erkannt")
-    );
-  } else {
-    addLine("Whisper: keine verwertbare Transkription.");
-  }
-
-  if (pronunciation) {
-    addLine(
-      `${PRONUNCIATION_MODEL}: ` +
-      (pronunciation.match
-        ? "Aussprache akzeptiert"
-        : "Aussprache nicht akzeptiert")
-    );
-
-    if (pronunciation.ipa) {
-      addLine(`Erkannte Lautfolge: ${pronunciation.ipa}`);
-    }
-
-    if (pronunciation.usage) {
-      addLine(
-        `Tokens: ${pronunciation.usage.prompt_tokens ?? "—"} Input / ` +
-        `${pronunciation.usage.completion_tokens ?? "—"} Output`
-      );
-    }
-
-    if (pronunciation.cost !== null) {
-      addLine(
-        `Modellkosten: ${Number(pronunciation.cost).toFixed(6)} USD`
-      );
-    }
-
-    if (pronunciation.notice) {
-      addLine(`NanoGPT-Hinweis: ${pronunciation.notice}`);
-    }
-  } else {
-    addLine("Aussprachemodell: keine verwertbare Bewertung.");
-  }
-
-  if (finalScore !== null) {
-    const scoreLine = document.createElement("div");
-    scoreLine.className = "score";
-    scoreLine.textContent = `Score: ${finalScore}`;
-    result.appendChild(scoreLine);
-  } else {
-    addLine("Kein Score: technische Bewertung unvollständig.");
-  }
-
-  if (mode === "word_check") {
-    addLine(
-      finalScore === 1
-        ? "Wort-Check bestanden."
-        : "Wort-Check nicht bestanden; du kannst weiter üben."
-    );
-  }
-
-  if (errors.length) {
-    addLine(`Technische Hinweise: ${errors.join(" | ")}`);
-  }
-
-  panel.classList.remove("hidden");
 }
 
 $("login-form").addEventListener("submit", async event => {
