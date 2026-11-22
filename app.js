@@ -675,12 +675,12 @@ async function requestAudioStream() {
 
 function configureRecorder(stream, mode, item) {
   const mimeType = chooseRecorderMimeType();
-
-  mediaRecorder = new MediaRecorder(
+  const recorder = new MediaRecorder(
     stream,
     mimeType ? { mimeType } : undefined
   );
 
+  mediaRecorder = recorder;
   recordingStream = stream;
   recordingChunks = [];
   recordingMode = mode;
@@ -689,7 +689,7 @@ function configureRecorder(stream, mode, item) {
   recordingStartedMonotonic = null;
   manualStop = false;
 
-  mediaRecorder.addEventListener(
+  recorder.addEventListener(
     "start",
     () => {
       recordingStartedAt = Date.now();
@@ -698,7 +698,7 @@ function configureRecorder(stream, mode, item) {
     { once: true }
   );
 
-  mediaRecorder.addEventListener("dataavailable", event => {
+  recorder.addEventListener("dataavailable", event => {
     if (!event.data?.size) return;
 
     const limitMs = getRecordingLimitMs(recordingMode);
@@ -714,14 +714,46 @@ function configureRecorder(stream, mode, item) {
       return;
     }
 
-    // Do not retain late chunks if browser timers were delayed.
-    if (mediaRecorder?.state === "recording") {
+    // Keine verspäteten Audio-Chunks behalten, falls ein Browser-Timer
+    // verzögert ausgeführt wurde.
+    if (recorder.state === "recording") {
       manualStop = false;
-      mediaRecorder.stop();
+      recorder.stop();
     }
   });
-}
 
+  recorder.addEventListener(
+    "stop",
+    () => {
+      // Das stop-Ereignis kommt nach dem letzten dataavailable-Ereignis.
+      // Erst jetzt sind alle Audio-Chunks für den Blob vorhanden.
+      void finishRecording().catch(error => {
+        console.error("Recording finalization failed:", error);
+
+        clearRecordingTimers();
+        stopMediaTracks();
+
+        recordingChunks = [];
+        mediaRecorder = null;
+        recordingMode = null;
+        recordingItem = null;
+        recordingStartedAt = null;
+        recordingStartedMonotonic = null;
+
+        resetRecordingUi();
+        setBusy(false);
+        updateWordCheckButton();
+
+        showMessage(
+          "Die Aufnahme konnte nicht verarbeitet werden. " +
+          (error.message || String(error)),
+          true
+        );
+      });
+    },
+    { once: true }
+  );
+}
 async function startPracticeRecording() {
   if (!currentApiKey) {
     showMessage("Bitte abmelden und erneut anmelden.", true);
