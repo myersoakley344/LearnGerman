@@ -66,45 +66,35 @@
         <div id="test-unlock-status" class="muted"></div>
       </section>
 
-      <section class="progress-box" aria-live="polite">
-  <strong id="word-check-progress">
-    0 von 0 Wörtern erfolgreich getestet
-  </strong>
-  <div id="test-unlock-status" class="muted"></div>
-</section>
+      <section class="test-box" aria-live="polite">
+        <strong>Lektionstest</strong>
+        <div id="test-status" class="muted">
+          Teststatus wird geladen …
+        </div>
+        <div
+          id="test-provisional-reward"
+          class="test-reward hidden"
+        ></div>
 
-<section class="test-box" aria-live="polite">
-  <strong>Lektionstest</strong>
-  <div id="test-status" class="muted">
-    Teststatus wird geladen …
-  </div>
-  <div id="test-provisional-reward" class="test-reward hidden"></div>
+        <div class="stack test-actions">
+          <button
+            id="test-start-button"
+            class="test-button"
+            type="button"
+            disabled
+          >
+            Lektionstest starten
+          </button>
 
-  <div class="stack test-actions">
-    <button
-      id="test-start-button"
-      class="test-button"
-      type="button"
-      disabled
-    >
-      Lektionstest starten
-    </button>
-
-    <button
-      id="test-abandon-button"
-      class="secondary hidden"
-      type="button"
-    >
-      Test abbrechen
-    </button>
-  </div>
-</section>
-
-<div class="word-status-row">
-  <span id="current-word-status" class="status-badge">
-    Noch nicht erfolgreich getestet
-  </span>
-</div>
+          <button
+            id="test-abandon-button"
+            class="secondary hidden"
+            type="button"
+          >
+            Test abbrechen
+          </button>
+        </div>
+      </section>
 
       <div class="word-status-row">
         <span id="current-word-status" class="status-badge">
@@ -114,20 +104,32 @@
 
       <div id="prompt" class="prompt" aria-live="polite">...</div>
 
-      <div id="timer-panel" class="timer-panel hidden" aria-live="assertive">
+      <div
+        id="timer-panel"
+        class="timer-panel hidden"
+        aria-live="assertive"
+      >
         <div id="timer-label">Aufnahme läuft</div>
         <div id="timer-countdown">2.0</div>
         <div id="timer-help"></div>
       </div>
 
       <div class="stack">
-        <button id="reveal-button" class="secondary" type="button">
+        <button
+          id="reveal-button"
+          class="secondary"
+          type="button"
+        >
           Asehoy ny dikanteny alemà
         </button>
 
         <div id="translation" class="translation hidden"></div>
 
-        <button id="play-audio-button" class="secondary" type="button">
+        <button
+          id="play-audio-button"
+          class="secondary"
+          type="button"
+        >
           Henoy ny teny alemà
         </button>
 
@@ -137,15 +139,27 @@
           Aufnahme mit Bewertung
         </button>
 
-        <button id="word-check-button" class="primary" type="button">
+        <button
+          id="word-check-button"
+          class="primary"
+          type="button"
+        >
           Zeitbegrenzten Wort-Check starten
         </button>
 
-        <button id="stop-button" class="danger hidden" type="button">
+        <button
+          id="stop-button"
+          class="danger hidden"
+          type="button"
+        >
           Fertig
         </button>
 
-        <audio id="recording-player" class="hidden" controls></audio>
+        <audio
+          id="recording-player"
+          class="hidden"
+          controls
+        ></audio>
       </div>
 
       <div id="evaluation-panel" class="evaluation-panel hidden">
@@ -154,11 +168,19 @@
       </div>
 
       <div class="nav-buttons">
-        <button id="repeat-button" class="secondary" type="button">
+        <button
+          id="repeat-button"
+          class="secondary"
+          type="button"
+        >
           Avereno ity teny ity
         </button>
 
-        <button id="skip-button" class="primary" type="button">
+        <button
+          id="skip-button"
+          class="primary"
+          type="button"
+        >
           Teny manaraka
         </button>
       </div>
