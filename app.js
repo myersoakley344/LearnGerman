@@ -11,13 +11,12 @@ const WHISPER_ENDPOINT = `${NANO_API_BASE}/audio/transcriptions`;
 const PRONUNCIATION_ENDPOINT = `${NANO_API_BASE}/chat/completions`;
 
 const WHISPER_DEFAULT_MODEL = "openai/whisper-large-v3";
-
-// Ändere diese Zeile nur, wenn deine NanoGPT-Modell-ID anders lautet.
 const PRONUNCIATION_MODEL = "google/gemini-4-carbon";
 
 const RECORDING_BUCKET = "learn-recordings";
 const TTS_BUCKET = "learn-tts";
-const WORD_CHECK_LIMIT_MS = 3000;
+
+const WORD_CHECK_LIMIT_MS = 2000;
 const REQUIRED_SUCCESSES_PER_WORD = 3;
 
 const supabaseClient = window.supabase.createClient(
@@ -33,6 +32,7 @@ let currentIndex = 0;
 let promptShownAt = null;
 let usedTranslationForCurrentItem = false;
 let usedAudioForCurrentItem = false;
+
 let mediaRecorder = null;
 let recordingStream = null;
 let recordingChunks = [];
@@ -45,7 +45,8 @@ let wordCheckStartedAt = null;
 let wordCheckDeadline = null;
 let manualStop = false;
 let isBusy = false;
-let practiceProgress = new Map();
+
+let practiceSuccessCounts = new Map();
 let passedWordChecks = new Set();
 let lastRecordingUrl = null;
 
@@ -135,6 +136,7 @@ function costFromObject(data) {
   if (!data || typeof data !== "object") return null;
 
   const pricing = data.x_nanogpt_pricing;
+
   if (pricing && typeof pricing === "object") {
     const amount = Number(pricing.amount ?? pricing.cost);
     if (Number.isFinite(amount)) return amount;
@@ -164,6 +166,7 @@ function costFromHeaders(headers) {
       if (Number.isFinite(amount)) return amount;
     } catch {
       const match = raw.match(/-?\d+(?:\.\d+)?/);
+
       if (match) {
         const amount = Number(match[0]);
         if (Number.isFinite(amount)) return amount;
@@ -190,11 +193,23 @@ async function lookupNanoCost(apiKey, requestId) {
     });
 
     if (!response.ok) return null;
+
     return costFromObject(await response.json());
   } catch (error) {
     console.warn("Could not look up NanoGPT cost:", error);
     return null;
   }
+}
+
+function readTokenCount(usage, fields) {
+  if (!usage) return null;
+
+  for (const field of fields) {
+    const value = Number(usage[field]);
+    if (Number.isFinite(value)) return value;
+  }
+
+  return null;
 }
 
 async function logEvent(eventType, item = null, payload = {}) {
@@ -212,7 +227,9 @@ async function logEvent(eventType, item = null, payload = {}) {
       payload
     });
 
-  if (error) console.error("Could not log event:", error);
+  if (error) {
+    console.error("Could not log event:", error);
+  }
 }
 
 async function logApiUsage({
@@ -255,18 +272,9 @@ async function logApiUsage({
       completed_at: new Date().toISOString()
     });
 
-  if (error) console.error("Could not log API usage:", error);
-}
-
-function readTokenCount(usage, fields) {
-  if (!usage) return null;
-
-  for (const field of fields) {
-    const value = Number(usage[field]);
-    if (Number.isFinite(value)) return value;
+  if (error) {
+    console.error("Could not log API usage:", error);
   }
-
-  return null;
 }
 
 async function getProfile(user) {
@@ -312,6 +320,7 @@ async function loadLessons() {
   }
 
   lessons = data || [];
+
   const select = $("lesson-select");
   select.replaceChildren();
 
@@ -369,8 +378,12 @@ async function loadItems(lessonId) {
 }
 
 async function loadLearnerProgress() {
-  practiceProgress = new Map();
+  practiceSuccessCounts = new Map();
   passedWordChecks = new Set();
+
+  for (const item of items) {
+    practiceSuccessCounts.set(item.id, 0);
+  }
 
   if (!currentUser || !items.length) {
     renderProgress();
@@ -400,10 +413,6 @@ async function loadLearnerProgress() {
     return;
   }
 
-  for (const item of items) {
-    practiceProgress.set(item.id, new Set());
-  }
-
   for (const attempt of data || []) {
     if (attempt.mode === "word_check") {
       if (
@@ -412,6 +421,7 @@ async function loadLearnerProgress() {
       ) {
         passedWordChecks.add(attempt.item_id);
       }
+
       continue;
     }
 
@@ -422,8 +432,10 @@ async function loadLearnerProgress() {
       !attempt.used_tts_audio;
 
     if (qualifies) {
-      const attempts = practiceProgress.get(attempt.item_id);
-      attempts?.add("successful");
+      const previous =
+        practiceSuccessCounts.get(attempt.item_id) || 0;
+
+      practiceSuccessCounts.set(attempt.item_id, previous + 1);
     }
   }
 
@@ -432,48 +444,44 @@ async function loadLearnerProgress() {
 
 function getRequiredPreparedWords() {
   const count = items.length;
+
   if (count === 0) return 0;
 
   return Math.max(1, count - Math.ceil(count * 0.1));
 }
 
 function getPreparedWordCount() {
-  let count = 0;
-
-  for (const item of items) {
-    if ((practiceProgress.get(item.id)?.size || 0) >=
-        REQUIRED_SUCCESSES_PER_WORD) {
-      count++;
-    }
-  }
-
-  return count;
+  return items.filter(item =>
+    (practiceSuccessCounts.get(item.id) || 0) >=
+    REQUIRED_SUCCESSES_PER_WORD
+  ).length;
 }
 
 function renderProgress() {
-  const passed = items.filter(item =>
+  const passedCount = items.filter(item =>
     passedWordChecks.has(item.id)
   ).length;
 
-  const total = items.length;
   $("word-check-progress").textContent =
-    `${passed} von ${total} Wörtern erfolgreich getestet`;
+    `${passedCount} von ${items.length} Wörtern erfolgreich getestet`;
 
   const required = getRequiredPreparedWords();
   const prepared = getPreparedWordCount();
 
-  if (!total) {
+  if (!items.length) {
     $("test-unlock-status").textContent = "";
   } else if (prepared >= required) {
     $("test-unlock-status").textContent =
       "Voraussetzung für den späteren Gesamttest erfüllt.";
   } else {
     $("test-unlock-status").textContent =
-      `Für den späteren Gesamttest: ${prepared} von ` +
-      `${required} Wörtern ausreichend geübt.`;
+      `Für einen Wort-Check müssen drei unbeeinflusste Übungserfolge ` +
+      `mit Score 1 erreicht werden. Für den späteren Gesamttest: ` +
+      `${prepared} von ${required} Wörtern ausreichend geübt.`;
   }
 
   renderCurrentWordStatus();
+  updateWordCheckButton();
 }
 
 function renderCurrentWordStatus() {
@@ -489,19 +497,36 @@ function renderCurrentWordStatus() {
   if (passedWordChecks.has(item.id)) {
     badge.textContent = "Wort erfolgreich getestet";
     badge.classList.add("passed");
-  } else {
-    const successes = practiceProgress.get(item.id)?.size || 0;
-
-    if (successes >= REQUIRED_SUCCESSES_PER_WORD) {
-      badge.textContent = "Geübt: bereit für den Wort-Check";
-    } else {
-      badge.textContent =
-        `Noch nicht erfolgreich getestet · ` +
-        `${successes}/${REQUIRED_SUCCESSES_PER_WORD} Übungserfolge`;
-    }
-
-    badge.classList.remove("passed");
+    return;
   }
+
+  const count = practiceSuccessCounts.get(item.id) || 0;
+
+  if (count >= REQUIRED_SUCCESSES_PER_WORD) {
+    badge.textContent = "3/3 Übungserfolge · Wort-Check bereit";
+  } else {
+    badge.textContent =
+      `${count}/${REQUIRED_SUCCESSES_PER_WORD} Übungserfolge · ` +
+      "Wort-Check noch gesperrt";
+  }
+
+  badge.classList.remove("passed");
+}
+
+function updateWordCheckButton() {
+  const item = currentItem();
+  if (!item) {
+    $("word-check-button").disabled = true;
+    return;
+  }
+
+  const count = practiceSuccessCounts.get(item.id) || 0;
+  const passed = passedWordChecks.has(item.id);
+
+  $("word-check-button").disabled =
+    isBusy ||
+    count < REQUIRED_SUCCESSES_PER_WORD ||
+    passed;
 }
 
 function getTtsUrl(path) {
@@ -546,7 +571,7 @@ function renderItem() {
     $("word-check-button").disabled = true;
     $("repeat-button").disabled = true;
     $("skip-button").disabled = true;
-    renderCurrentWordStatus();
+    renderProgress();
     return;
   }
 
@@ -557,11 +582,9 @@ function renderItem() {
   $("reveal-button").disabled = false;
   $("play-audio-button").disabled = !item.tts_audio_path;
   $("record-button").disabled = false;
-  $("word-check-button").disabled = false;
   $("repeat-button").disabled = false;
   $("skip-button").disabled = false;
 
-  renderCurrentWordStatus();
   renderProgress();
 
   logEvent("item_shown", item, { index: currentIndex });
@@ -570,7 +593,7 @@ function renderItem() {
 
 function revealTranslation() {
   const item = currentItem();
-  if (!item) return;
+  if (!item || recordingMode === "word_check") return;
 
   $("translation").textContent = item.target_de;
   $("translation").classList.remove("hidden");
@@ -586,6 +609,8 @@ async function playTts() {
     showMessage("No TTS audio is available for this item.", true);
     return;
   }
+
+  if (recordingMode === "word_check") return;
 
   const player = $("tts-player");
   player.src = getTtsUrl(item.tts_audio_path);
@@ -669,9 +694,11 @@ async function startPracticeRecording() {
   if (!item || isBusy) return;
 
   try {
+    setBusy(true);
+    showMessage("Mikrofon wird vorbereitet …");
+
     const stream = await requestAudioStream();
     configureRecorder(stream, "practice", item);
-
     mediaRecorder.start();
 
     $("record-button").classList.add("hidden");
@@ -680,13 +707,19 @@ async function startPracticeRecording() {
     $("stop-button").disabled = false;
 
     showMessage("Aufnahme läuft. Tippe auf „Fertig“, wenn du fertig bist.");
+
     await logEvent("recording_started", item, {
       mode: "practice"
     });
   } catch (error) {
     console.error(error);
     stopMediaTracks();
-    showMessage(error.message || "Aufnahme konnte nicht gestartet werden.", true);
+    resetRecordingUi();
+    setBusy(false);
+    showMessage(
+      error.message || "Aufnahme konnte nicht gestartet werden.",
+      true
+    );
   }
 }
 
@@ -697,7 +730,24 @@ async function startWordCheck() {
   }
 
   const item = currentItem();
+  const count = item
+    ? practiceSuccessCounts.get(item.id) || 0
+    : 0;
+
   if (!item || isBusy || mediaRecorder) return;
+
+  if (count < REQUIRED_SUCCESSES_PER_WORD) {
+    showMessage(
+      `Für den Wort-Check brauchst du zuerst ` +
+      `${REQUIRED_SUCCESSES_PER_WORD} erfolgreiche Übungsversuche.`
+    );
+    return;
+  }
+
+  if (passedWordChecks.has(item.id)) {
+    showMessage("Dieses Wort ist bereits erfolgreich getestet.", false);
+    return;
+  }
 
   setBusy(true);
   showMessage("Mikrofon wird vorbereitet …");
@@ -732,10 +782,11 @@ function onWordCheckRecorderStarted(item) {
 
   $("prompt").textContent = item.prompt_mg;
   $("timer-panel").classList.remove("hidden");
-  $("timer-countdown").textContent = "3.0";
+  $("timer-countdown").textContent =
+    (WORD_CHECK_LIMIT_MS / 1000).toFixed(1);
   $("timer-label").textContent = "Wort-Check läuft";
   $("timer-help").textContent =
-    "Sprich das deutsche Wort. Die Aufnahme endet spätestens nach 3 Sekunden.";
+    "Sprich das deutsche Wort. Die Aufnahme endet spätestens nach 2 Sekunden.";
 
   $("record-button").classList.add("hidden");
   $("word-check-button").classList.add("hidden");
@@ -765,7 +816,7 @@ function onWordCheckRecorderStarted(item) {
       clearInterval(countdownTimer);
       countdownTimer = null;
     }
-  }, 50);
+  }, 40);
 
   recordingDeadlineTimer = window.setTimeout(() => {
     if (mediaRecorder?.state === "recording") {
@@ -780,6 +831,7 @@ function stopRecordingManually() {
 
   manualStop = true;
   clearRecordingTimers();
+
   $("stop-button").disabled = true;
   mediaRecorder.stop();
 }
@@ -820,18 +872,23 @@ async function finishRecording() {
   const item = recordingItem;
   const startedAt = recordingStartedAt;
   const promptTime = promptShownAt;
-  const endedAt = Date.now();
   const timeLimitMs =
     mode === "word_check" ? WORD_CHECK_LIMIT_MS : null;
 
-  let durationMs = Math.max(0, endedAt - (startedAt || endedAt));
-  let endReason = mode === "word_check"
+  let durationMs = Math.max(
+    0,
+    Date.now() - (startedAt || Date.now())
+  );
+
+  const endReason = mode === "word_check"
     ? (manualStop ? "manual" : "deadline")
     : "manual";
 
   if (mode === "word_check" && wordCheckStartedAt !== null) {
-    const elapsed = performance.now() - wordCheckStartedAt;
-    durationMs = Math.min(WORD_CHECK_LIMIT_MS, Math.max(0, elapsed));
+    durationMs = Math.min(
+      WORD_CHECK_LIMIT_MS,
+      Math.max(0, performance.now() - wordCheckStartedAt)
+    );
   }
 
   $("stop-button").classList.add("hidden");
@@ -839,8 +896,6 @@ async function finishRecording() {
   $("word-check-button").classList.remove("hidden");
   $("reveal-button").classList.remove("hidden");
   $("play-audio-button").classList.remove("hidden");
-  $("record-button").disabled = true;
-  $("word-check-button").disabled = true;
 
   if (!item || !mediaRecorder) {
     resetRecordingUi();
@@ -870,13 +925,15 @@ async function finishRecording() {
   if (!sourceBlob.size) {
     resetRecordingUi();
     setBusy(false);
-    $("record-button").disabled = false;
-    $("word-check-button").disabled = false;
+    updateWordCheckButton();
     showMessage("Keine Audiodaten aufgenommen. Bitte erneut versuchen.", true);
     return;
   }
 
-  if (lastRecordingUrl) URL.revokeObjectURL(lastRecordingUrl);
+  if (lastRecordingUrl) {
+    URL.revokeObjectURL(lastRecordingUrl);
+  }
+
   lastRecordingUrl = URL.createObjectURL(sourceBlob);
 
   const recordingPlayer = $("recording-player");
@@ -929,9 +986,9 @@ async function evaluateRecording({
     wavBlob = await convertBlobToWav(sourceBlob);
   } catch (error) {
     console.error(error);
+    resetRecordingUi();
     setBusy(false);
-    $("record-button").disabled = false;
-    $("word-check-button").disabled = false;
+    updateWordCheckButton();
     showMessage(
       "Audio konnte nicht verarbeitet werden. Bitte erneut versuchen.",
       true
@@ -943,23 +1000,19 @@ async function evaluateRecording({
   const audioPath =
     `${currentUser.id}/${item.lesson_id}/${item.id}/${attemptId}.wav`;
 
-  const uploadPromise = uploadRecording(audioPath, wavBlob);
-  const whisperPromise = callWhisper({
-    apiKey: currentApiKey,
-    model: whisperModel,
-    wavBlob
-  });
-  const pronunciationPromise = callPronunciationModel({
-    apiKey: currentApiKey,
-    item,
-    wavBlob
-  });
-
   const [uploadResult, whisperResult, pronunciationResult] =
     await Promise.allSettled([
-      uploadPromise,
-      whisperPromise,
-      pronunciationPromise
+      uploadRecording(audioPath, wavBlob),
+      callWhisper({
+        apiKey: currentApiKey,
+        model: whisperModel,
+        wavBlob
+      }),
+      callPronunciationModel({
+        apiKey: currentApiKey,
+        item,
+        wavBlob
+      })
     ]);
 
   const uploadSucceeded = uploadResult.status === "fulfilled";
@@ -1083,6 +1136,8 @@ async function evaluateRecording({
     audioDurationMs: durationMs
   });
 
+  await loadLearnerProgress();
+
   showEvaluation({
     item,
     whisper,
@@ -1094,27 +1149,25 @@ async function evaluateRecording({
 
   resetRecordingUi();
   setBusy(false);
-  $("record-button").disabled = false;
-  $("word-check-button").disabled = false;
+  updateWordCheckButton();
 
-  if (mode === "word_check" && finalScore === 1 && !errors.length) {
-    passedWordChecks.add(item.id);
-    await loadLearnerProgress();
-
-    showMessage("Wort-Check bestanden: Score 1,0.", false);
-  } else if (errors.length) {
+  if (errors.length) {
     showMessage(
-      "Technisches Problem bei der Bewertung. Es wurde kein bestandenes " +
-      "Wort-Check-Ergebnis gespeichert.",
+      "Technisches Problem bei der Bewertung. " +
+      "Es wurde kein erfolgreicher Wort-Check gespeichert.",
       true
     );
+  } else if (mode === "word_check" && finalScore === 1) {
+    showMessage("Wort-Check bestanden: Score 1,0.", false);
   } else if (mode === "word_check" && finalScore === 0.75) {
     showMessage(
       "Wort erkannt, Aussprache noch nicht vollständig akzeptiert. " +
       "Übe weiter und versuche den Wort-Check erneut."
     );
   } else if (mode === "word_check") {
-    showMessage("Wort-Check nicht bestanden. Übe das Wort und versuche es erneut.");
+    showMessage(
+      "Wort-Check nicht bestanden. Übe das Wort und versuche es erneut."
+    );
   } else {
     showMessage("Bewertung abgeschlossen.", false);
   }
@@ -1284,6 +1337,7 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
   content = String(content || "").trim();
 
   const jsonMatch = content.match(/\{[\s\S]*\}/);
+
   if (!jsonMatch) {
     const notice = data.x_nanogpt_notice
       ? ` NanoGPT-Hinweis: ${data.x_nanogpt_notice}`
@@ -1513,7 +1567,401 @@ function showEvaluation({
   panel.classList.remove("hidden");
 }
 
-async function handleLogin(event) {
+function errorText(error) {
+  if (!error) return "Unbekannter Fehler";
+  return error.message || String(error);
+}
+
+async function getNextAttemptNumber(itemId, mode) {
+  const { count, error } = await supabaseClient
+    .from("learn_attempts")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", currentUser.id)
+    .eq("item_id", itemId)
+    .eq("mode", mode);
+
+  if (error) {
+    console.warn("Could not count previous attempts:", error);
+    return 1;
+  }
+
+  return (count || 0) + 1;
+}
+
+async function uploadRecording(path, blob) {
+  const { error } = await supabaseClient
+    .storage
+    .from(RECORDING_BUCKET)
+    .upload(path, blob, {
+      contentType: "audio/wav",
+      upsert: false
+    });
+
+  if (error) throw error;
+  return path;
+}
+
+async function callWhisper({ apiKey, model, wavBlob }) {
+  const form = new FormData();
+  form.append("model", model);
+  form.append("file", wavBlob, "answer.wav");
+  form.append("language", "de");
+  form.append("response_format", "json");
+
+  const response = await fetch(WHISPER_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "Accept": "application/json"
+    },
+    body: form
+  });
+
+  const requestId = response.headers.get("x-request-id");
+  const bodyText = await response.text();
+
+  if (!response.ok) {
+    throw new Error(
+      `HTTP ${response.status}: ${bodyText.slice(0, 700)}`
+    );
+  }
+
+  let data;
+
+  try {
+    data = JSON.parse(bodyText);
+  } catch {
+    throw new Error(
+      `Whisper-Antwort war kein JSON: ${bodyText.slice(0, 500)}`
+    );
+  }
+
+  const text = String(data.text || "").trim();
+
+  if (!text) {
+    throw new Error("Whisper lieferte kein Transkript.");
+  }
+
+  let cost = costFromHeaders(response.headers);
+  if (cost === null) cost = costFromObject(data);
+  if (cost === null) {
+    cost = await lookupNanoCost(apiKey, requestId);
+  }
+
+  return {
+    text,
+    requestId,
+    cost,
+    usage: data.usage || null
+  };
+}
+
+async function callPronunciationModel({ apiKey, item, wavBlob }) {
+  const base64Audio = await blobToBase64(wavBlob);
+
+  const prompt =
+    "Analysiere das Audio in zwei Schritten. " +
+    "1. Bestimme ausschließlich aus dem Audio die tatsächlich gesprochene " +
+    "deutsche Lautfolge in breiter IPA-Notation. " +
+    "2. Vergleiche sie mit einer akzeptablen Standardaussprache des " +
+    "Referenztexts. Akzeptiere normale Akzentvariation, aber nicht deutlich " +
+    "falsche, ausgelassene oder hinzugefügte Laute. " +
+    "Antworte ausschließlich als JSON mit den Feldern ipa und match, " +
+    "ohne Markdown oder Erklärung. " +
+    `Referenztext: ${item.target_de}`;
+
+  const response = await fetch(PRONUNCIATION_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "Content-Type": "application/json",
+      "Accept": "application/json"
+    },
+    body: JSON.stringify({
+      model: PRONUNCIATION_MODEL,
+      stream: false,
+      reasoning_effort: "low",
+      max_tokens: 1024,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: prompt },
+            {
+              type: "input_audio",
+              input_audio: {
+                data: base64Audio,
+                format: "wav"
+              }
+            }
+          ]
+        }
+      ]
+    })
+  });
+
+  const requestId = response.headers.get("x-request-id");
+  const bodyText = await response.text();
+
+  if (!response.ok) {
+    throw new Error(
+      `HTTP ${response.status}: ${bodyText.slice(0, 700)}`
+    );
+  }
+
+  let data;
+
+  try {
+    data = JSON.parse(bodyText);
+  } catch {
+    throw new Error(
+      `Aussprachemodell lieferte kein JSON: ${bodyText.slice(0, 500)}`
+    );
+  }
+
+  let content = data.choices?.[0]?.message?.content;
+
+  if (Array.isArray(content)) {
+    content = content
+      .filter(part => typeof part?.text === "string")
+      .map(part => part.text)
+      .join("");
+  }
+
+  content = String(content || "").trim();
+
+  const jsonMatch = content.match(/\{[\s\S]*\}/);
+
+  if (!jsonMatch) {
+    const notice = data.x_nanogpt_notice
+      ? ` NanoGPT-Hinweis: ${data.x_nanogpt_notice}`
+      : "";
+
+    throw new Error(
+      `Kein JSON in der Ausspracheantwort gefunden: ` +
+      `${content.slice(0, 500)}.${notice}`
+    );
+  }
+
+  let result;
+
+  try {
+    result = JSON.parse(jsonMatch[0]);
+  } catch {
+    throw new Error(
+      `Ungültiges Aussprache-JSON: ${jsonMatch[0].slice(0, 500)}`
+    );
+  }
+
+  if (typeof result.match !== "boolean") {
+    throw new Error("Antwort enthält kein boolesches Feld 'match'.");
+  }
+
+  let cost = costFromHeaders(response.headers);
+  if (cost === null) cost = costFromObject(data);
+  if (cost === null) {
+    cost = await lookupNanoCost(apiKey, requestId);
+  }
+
+  return {
+    ipa: String(result.ipa || ""),
+    match: result.match,
+    requestId,
+    cost,
+    usage: data.usage || null,
+    notice: data.x_nanogpt_notice || null
+  };
+}
+
+async function blobToBase64(blob) {
+  const buffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return btoa(binary);
+}
+
+async function convertBlobToWav(blob) {
+  const AudioContextClass =
+    window.AudioContext || window.webkitAudioContext;
+
+  if (!AudioContextClass) {
+    throw new Error("Web Audio API ist nicht verfügbar.");
+  }
+
+  const context = new AudioContextClass();
+
+  try {
+    const inputBuffer = await context.decodeAudioData(
+      await blob.arrayBuffer()
+    );
+
+    const targetRate = 16000;
+    const ratio = inputBuffer.sampleRate / targetRate;
+    const outputLength = Math.ceil(inputBuffer.length / ratio);
+    const mono = new Float32Array(outputLength);
+
+    for (
+      let channel = 0;
+      channel < inputBuffer.numberOfChannels;
+      channel++
+    ) {
+      const source = inputBuffer.getChannelData(channel);
+
+      for (let index = 0; index < outputLength; index++) {
+        const sourcePosition = index * ratio;
+        const left = Math.floor(sourcePosition);
+        const right = Math.min(left + 1, source.length - 1);
+        const fraction = sourcePosition - left;
+        const sample =
+          source[left] * (1 - fraction) +
+          source[right] * fraction;
+
+        mono[index] += sample / inputBuffer.numberOfChannels;
+      }
+    }
+
+    return encodeWav(mono, targetRate);
+  } finally {
+    await context.close();
+  }
+}
+
+function encodeWav(samples, sampleRate) {
+  const bytesPerSample = 2;
+  const dataSize = samples.length * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  writeAscii(view, 0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeAscii(view, 8, "WAVE");
+  writeAscii(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * bytesPerSample, true);
+  view.setUint16(32, bytesPerSample, true);
+  view.setUint16(34, 16, true);
+  writeAscii(view, 36, "data");
+  view.setUint32(40, dataSize, true);
+
+  let offset = 44;
+
+  for (const sample of samples) {
+    const clipped = Math.max(-1, Math.min(1, sample));
+    const value = clipped < 0
+      ? clipped * 0x8000
+      : clipped * 0x7fff;
+
+    view.setInt16(offset, value, true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function writeAscii(view, offset, text) {
+  for (let index = 0; index < text.length; index++) {
+    view.setUint8(offset + index, text.charCodeAt(index));
+  }
+}
+
+function showEvaluation({
+  item,
+  whisper,
+  pronunciation,
+  finalScore,
+  errors,
+  mode
+}) {
+  const panel = $("evaluation-panel");
+  const result = $("evaluation-result");
+  result.replaceChildren();
+
+  const addLine = text => {
+    const div = document.createElement("div");
+    div.className = "evaluation-line";
+    div.textContent = text;
+    result.appendChild(div);
+  };
+
+  if (whisper) {
+    const recognized =
+      normalizeWord(whisper.text) === normalizeWord(item.target_de);
+
+    addLine(
+      `Whisper: "${whisper.text}" — ` +
+      (recognized ? "Zielwort erkannt" : "Zielwort nicht exakt erkannt")
+    );
+  } else {
+    addLine("Whisper: keine verwertbare Transkription.");
+  }
+
+  if (pronunciation) {
+    addLine(
+      `${PRONUNCIATION_MODEL}: ` +
+      (pronunciation.match
+        ? "Aussprache akzeptiert"
+        : "Aussprache nicht akzeptiert")
+    );
+
+    if (pronunciation.ipa) {
+      addLine(`Erkannte Lautfolge: ${pronunciation.ipa}`);
+    }
+
+    if (pronunciation.usage) {
+      addLine(
+        `Tokens: ${pronunciation.usage.prompt_tokens ?? "—"} Input / ` +
+        `${pronunciation.usage.completion_tokens ?? "—"} Output`
+      );
+    }
+
+    if (pronunciation.cost !== null) {
+      addLine(
+        `Modellkosten: ${Number(pronunciation.cost).toFixed(6)} USD`
+      );
+    }
+
+    if (pronunciation.notice) {
+      addLine(`NanoGPT-Hinweis: ${pronunciation.notice}`);
+    }
+  } else {
+    addLine("Aussprachemodell: keine verwertbare Bewertung.");
+  }
+
+  if (finalScore !== null) {
+    const scoreLine = document.createElement("div");
+    scoreLine.className = "score";
+    scoreLine.textContent = `Score: ${finalScore}`;
+    result.appendChild(scoreLine);
+  } else {
+    addLine("Kein Score: technische Bewertung unvollständig.");
+  }
+
+  if (mode === "word_check") {
+    addLine(
+      finalScore === 1
+        ? "Wort-Check bestanden."
+        : "Wort-Check nicht bestanden; du kannst weiter üben."
+    );
+  }
+
+  if (errors.length) {
+    addLine(`Technische Hinweise: ${errors.join(" | ")}`);
+  }
+
+  panel.classList.remove("hidden");
+}
+
+$("login-form").addEventListener("submit", async event => {
   event.preventDefault();
   $("login-message").textContent = "Anmeldung wird geprüft …";
 
@@ -1555,9 +2003,7 @@ async function handleLogin(event) {
     $("login-message").textContent =
       profileError.message || "Profil konnte nicht geladen werden.";
   }
-}
-
-$("login-form").addEventListener("submit", handleLogin);
+});
 
 $("lesson-select").addEventListener("change", async event => {
   await loadItems(event.target.value);
@@ -1571,7 +2017,7 @@ $("stop-button").addEventListener("click", stopRecordingManually);
 
 $("repeat-button").addEventListener("click", async () => {
   const item = currentItem();
-  if (!item || isBusy) return;
+  if (!item || isBusy || mediaRecorder) return;
 
   await logEvent("item_repeated", item, { index: currentIndex });
   renderItem();
@@ -1581,6 +2027,7 @@ $("skip-button").addEventListener("click", async () => {
   if (!items.length || isBusy || mediaRecorder) return;
 
   const item = currentItem();
+
   if (item) {
     await logEvent("item_skipped", item, { index: currentIndex });
   }
