@@ -15,7 +15,7 @@ export const TTS_BUCKET = "learn-tts";
 
 export const PRACTICE_RECORDING_LIMIT_MS = 20_000;
 export const WORD_CHECK_LIMIT_MS = 2_000;
-export const TEST_RECORDING_LIMIT_MS = 3_000;
+export const TEST_RECORDING_LIMIT_MS = 4_000;
 export const RECORDING_CHUNK_MS = 100;
 export const RECORDING_CHUNK_GRACE_MS = 250;
 export const REQUIRED_SUCCESSES_PER_WORD = 3;
@@ -43,6 +43,8 @@ export const state = {
   usedTranslationForCurrentItem: false,
   usedAudioForCurrentItem: false,
 
+  wordCheckArmed: false,
+
   mediaRecorder: null,
   recordingStream: null,
   recordingChunks: [],
@@ -65,6 +67,8 @@ export const state = {
   testEligibility: {
     starts: 0,
     completed: false,
+    latestCompletedScore: null,
+    latestCompletedReward: null,
     loadFailed: false
   }
 };
