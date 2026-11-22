@@ -20,13 +20,18 @@ export function setBusy(value) {
   state.isBusy = value;
 
   $("lesson-select").disabled =
-    value || Boolean(state.testRunState?.active);
+    value || Boolean(state.testRunState?.active) || state.wordCheckArmed;
 
   $("reveal-button").disabled = value;
   $("play-audio-button").disabled = value;
   $("record-button").disabled = value;
+  $("word-check-cancel-button").disabled = value;
   $("repeat-button").disabled = value;
   $("skip-button").disabled = value;
+
+  // TEMPORÄR: Reset-Button für die Testphase
+  const resetButton = $("reset-tests-button");
+  if (resetButton) resetButton.disabled = value;
 
   updateWordCheckButton();
   renderTestControls();
@@ -53,6 +58,7 @@ export function renderTestControls() {
     reward.textContent =
       `Vorläufiger Betrag: ${formatTestReward(state.testRunState.reward)}`;
     reward.classList.remove("hidden");
+    startButton.textContent = "Lektionstest starten";
     startButton.disabled = true;
     return;
   }
@@ -60,33 +66,61 @@ export function renderTestControls() {
   reward.classList.add("hidden");
 
   if (state.testEligibility.loadFailed) {
+    startButton.textContent = "Lektionstest starten";
     status.textContent =
       "Teststatus konnte nicht geladen werden. Bitte Seite neu laden.";
     startButton.disabled = true;
-  } else if (state.testEligibility.completed) {
-    status.textContent = "Dieser Lektionstest wurde bereits abgeschlossen.";
-    startButton.disabled = true;
-  } else if (state.testEligibility.starts >= MAX_TEST_STARTS) {
-    status.textContent =
-      `Das Startlimit von ${MAX_TEST_STARTS} Tests wurde erreicht.`;
-    startButton.disabled = true;
-  } else {
-    const required = getRequiredPreparedWords();
-    const prepared = getPreparedWordCount();
+    return;
+  }
 
-    if (prepared < required) {
+  if (state.testEligibility.starts >= MAX_TEST_STARTS) {
+    startButton.textContent = "Lektionstest starten";
+
+    if (state.testEligibility.completed) {
       status.textContent =
-        `Freischaltung: ${prepared} von ${required} ausreichend vorbereiteten ` +
-        "Wörtern. Jedes Wort braucht drei hilfefreie Übungserfolge.";
-      startButton.disabled = true;
+        `Startlimit (${MAX_TEST_STARTS}/${MAX_TEST_STARTS}) erreicht. ` +
+        `Gültiges Ergebnis: Score ` +
+        `${Number(state.testEligibility.latestCompletedScore).toFixed(2)} ` +
+        `(${formatTestReward(state.testEligibility.latestCompletedReward)}).`;
     } else {
       status.textContent =
-        `Freigeschaltet. Verfügbare Starts: ` +
-        `${MAX_TEST_STARTS - state.testEligibility.starts} ` +
-        `von ${MAX_TEST_STARTS}.`;
-      startButton.disabled = state.isBusy;
+        `Das Startlimit von ${MAX_TEST_STARTS} Tests wurde erreicht.`;
     }
+
+    startButton.disabled = true;
+    return;
   }
+
+  const required = getRequiredPreparedWords();
+  const prepared = getPreparedWordCount();
+
+  if (prepared < required) {
+    startButton.textContent = "Lektionstest starten";
+    status.textContent =
+      `Freischaltung: ${prepared} von ${required} ausreichend vorbereiteten ` +
+      "Wörtern. Jedes Wort braucht drei hilfefreie Übungserfolge.";
+    startButton.disabled = true;
+    return;
+  }
+
+  const remaining = MAX_TEST_STARTS - state.testEligibility.starts;
+
+  if (state.testEligibility.completed) {
+    startButton.textContent = "Lektionstest wiederholen";
+    status.textContent =
+      `Aktuelles gültiges Ergebnis: Score ` +
+      `${Number(state.testEligibility.latestCompletedScore).toFixed(2)} ` +
+      `(${formatTestReward(state.testEligibility.latestCompletedReward)}). ` +
+      `Verbleibende Starts: ${remaining} von ${MAX_TEST_STARTS}. ` +
+      "Ein neu abgeschlossener Test ersetzt das bisherige Ergebnis.";
+  } else {
+    startButton.textContent = "Lektionstest starten";
+    status.textContent =
+      `Freigeschaltet. Verfügbare Starts: ` +
+      `${remaining} von ${MAX_TEST_STARTS}.`;
+  }
+
+  startButton.disabled = state.isBusy || state.wordCheckArmed;
 }
 
 export function renderProgress() {
@@ -161,6 +195,7 @@ export function updateWordCheckButton() {
 
   button.disabled =
     state.isBusy ||
+    state.wordCheckArmed ||
     Boolean(state.testRunState?.active) ||
     successes < REQUIRED_SUCCESSES_PER_WORD ||
     state.passedWordChecks.has(item.id);
@@ -189,12 +224,15 @@ export function renderItem() {
   }
 
   if (!item) {
+    state.wordCheckArmed = false;
+    $("app-screen").classList.remove("word-check-armed");
     $("prompt").textContent = "No items in this lesson.";
     $("item-position").textContent = "";
     $("reveal-button").disabled = true;
     $("play-audio-button").disabled = true;
     $("record-button").disabled = true;
     $("word-check-button").disabled = true;
+    $("word-check-cancel-button").classList.add("hidden");
     $("repeat-button").disabled = true;
     $("skip-button").disabled = true;
     renderProgress();
@@ -204,6 +242,8 @@ export function renderItem() {
   $("prompt").textContent = item.prompt_mg;
 
   if (state.testRunState?.active) {
+    state.wordCheckArmed = false;
+    $("app-screen").classList.remove("word-check-armed");
     $("item-position").textContent =
       `Testwort ${state.testRunState.index + 1} / ` +
       `${state.testRunState.queue.length}`;
@@ -213,23 +253,47 @@ export function renderItem() {
     $("play-audio-button").classList.add("hidden");
     $("tts-player").classList.add("hidden");
     $("word-check-button").classList.add("hidden");
+    $("word-check-cancel-button").classList.add("hidden");
     $("repeat-button").classList.add("hidden");
     $("skip-button").classList.add("hidden");
 
     $("record-button").textContent = "Testantwort aufnehmen";
     $("record-button").classList.remove("hidden");
+    $("record-button").disabled = state.isBusy;
+    $("lesson-select").disabled = true;
+  } else if (state.wordCheckArmed) {
+    $("app-screen").classList.add("word-check-armed");
+    $("item-position").textContent =
+      `Teny ${state.currentIndex + 1} / ${state.items.length} · Wort-Check`;
+
+    $("reveal-button").classList.add("hidden");
+    $("translation").classList.add("hidden");
+    $("play-audio-button").classList.add("hidden");
+    $("tts-player").classList.add("hidden");
+    $("word-check-button").classList.add("hidden");
+    $("repeat-button").classList.add("hidden");
+    $("skip-button").classList.add("hidden");
+
+    $("record-button").textContent = "Wort-Check-Aufnahme starten";
+    $("record-button").classList.remove("hidden");
+    $("record-button").disabled = state.isBusy;
+    $("word-check-cancel-button").classList.remove("hidden");
+    $("word-check-cancel-button").disabled = state.isBusy;
     $("lesson-select").disabled = true;
   } else {
+    $("app-screen").classList.remove("word-check-armed");
     $("item-position").textContent =
       `Teny ${state.currentIndex + 1} / ${state.items.length}`;
 
     $("reveal-button").classList.remove("hidden");
     $("play-audio-button").classList.remove("hidden");
     $("word-check-button").classList.remove("hidden");
+    $("word-check-cancel-button").classList.add("hidden");
     $("repeat-button").classList.remove("hidden");
     $("skip-button").classList.remove("hidden");
 
     $("record-button").textContent = "Aufnahme mit Bewertung";
+    $("record-button").classList.remove("hidden");
     $("lesson-select").disabled = state.isBusy;
 
     $("reveal-button").disabled = state.isBusy;
@@ -241,8 +305,11 @@ export function renderItem() {
   }
 
   renderProgress();
-  logEvent("item_shown", item, { index: state.currentIndex });
-  showMessage("");
+
+  if (!state.wordCheckArmed) {
+    logEvent("item_shown", item, { index: state.currentIndex });
+    showMessage("");
+  }
 }
 
 export function revealTranslation() {
@@ -250,6 +317,7 @@ export function revealTranslation() {
   if (
     !item ||
     state.testRunState?.active ||
+    state.wordCheckArmed ||
     state.recordingMode === "word_check"
   ) {
     return;
@@ -270,7 +338,11 @@ export async function playTts() {
     return;
   }
 
-  if (state.testRunState?.active || state.recordingMode === "word_check") {
+  if (
+    state.testRunState?.active ||
+    state.wordCheckArmed ||
+    state.recordingMode === "word_check"
+  ) {
     return;
   }
 
@@ -292,6 +364,8 @@ export async function playTts() {
 export function resetRecordingUi() {
   $("stop-button").classList.add("hidden");
   $("record-button").classList.remove("hidden");
+  $("word-check-cancel-button").classList.add("hidden");
+  $("app-screen").classList.remove("word-check-armed");
 
   if (state.testRunState?.active) {
     $("word-check-button").classList.add("hidden");
