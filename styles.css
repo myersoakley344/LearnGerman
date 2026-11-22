@@ -147,8 +147,8 @@ summary:focus-visible {
   gap: 7px;
   margin-top: 12px;
   padding: 12px;
-  background: #f3effa;
-  border: 1px solid #d9c9eb;
+  background: #eff8f1;
+  border: 1px solid #b9ddc2;
   border-radius: 10px;
 }
 
@@ -158,11 +158,23 @@ summary:focus-visible {
 
 .test-button {
   color: #fff;
-  background: #68449a;
+  background: #238247;
+  box-shadow: 0 2px 5px #174d2c30;
+}
+
+.test-button:not(:disabled):hover {
+  background: #176b37;
+}
+
+.test-button:disabled {
+  color: #486451;
+  background: #dcebe0;
+  box-shadow: none;
+  opacity: 1;
 }
 
 .test-reward {
-  color: #4f3477;
+  color: #176438;
   font-weight: 750;
 }
 
@@ -189,6 +201,7 @@ summary:focus-visible {
 }
 
 .prompt {
+  position: relative;
   min-height: 150px;
   display: grid;
   place-items: center;
@@ -201,6 +214,29 @@ summary:focus-visible {
   background: #f0f4f7;
   border: 1px solid #d9e0e6;
   border-radius: 12px;
+}
+
+/*
+ * Im Lektionstest bleibt das Malagasy-Wort vor der Aufnahme unsichtbar.
+ * Der Wortzähler steht bereits in #item-position.
+ */
+#app-screen:has(#test-abandon-button:not(.hidden))
+  :not(:has(#timer-panel:not(.hidden))) #prompt {
+  color: transparent;
+  user-select: none;
+}
+
+#app-screen:has(#test-abandon-button:not(.hidden))
+  :not(:has(#timer-panel:not(.hidden))) #prompt::after {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px 14px;
+  color: #53616f;
+  font-size: 1.15rem;
+  font-weight: 650;
+  content: "Bereit für das nächste Wort";
 }
 
 .translation {
