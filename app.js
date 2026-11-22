@@ -35,6 +35,7 @@ let currentApiKey = null;
 let lessons = [];
 let items = [];
 let currentIndex = 0;
+
 let promptShownAt = null;
 let usedTranslationForCurrentItem = false;
 let usedAudioForCurrentItem = false;
@@ -75,9 +76,10 @@ function setBusy(value) {
   $("reveal-button").disabled = value;
   $("play-audio-button").disabled = value;
   $("record-button").disabled = value;
-  $("word-check-button").disabled = value;
   $("repeat-button").disabled = value;
   $("skip-button").disabled = value;
+
+  updateWordCheckButton();
 }
 
 function normalizeWord(text) {
@@ -142,7 +144,6 @@ function costFromObject(data) {
   if (!data || typeof data !== "object") return null;
 
   const pricing = data.x_nanogpt_pricing;
-
   if (pricing && typeof pricing === "object") {
     const amount = Number(pricing.amount ?? pricing.cost);
     if (Number.isFinite(amount)) return amount;
@@ -172,7 +173,6 @@ function costFromHeaders(headers) {
       if (Number.isFinite(amount)) return amount;
     } catch {
       const match = raw.match(/-?\d+(?:\.\d+)?/);
-
       if (match) {
         const amount = Number(match[0]);
         if (Number.isFinite(amount)) return amount;
@@ -199,7 +199,6 @@ async function lookupNanoCost(apiKey, requestId) {
     });
 
     if (!response.ok) return null;
-
     return costFromObject(await response.json());
   } catch (error) {
     console.warn("Could not look up NanoGPT cost:", error);
@@ -449,10 +448,12 @@ async function loadLearnerProgress() {
 }
 
 function getRequiredPreparedWords() {
-  const count = items.length;
-  if (count === 0) return 0;
+  if (items.length === 0) return 0;
 
-  return Math.max(1, count - Math.ceil(count * 0.1));
+  return Math.max(
+    1,
+    items.length - Math.ceil(items.length * 0.1)
+  );
 }
 
 function getPreparedWordCount() {
@@ -591,7 +592,6 @@ function renderItem() {
   $("skip-button").disabled = false;
 
   renderProgress();
-
   logEvent("item_shown", item, { index: currentIndex });
   showMessage("");
 }
@@ -712,10 +712,7 @@ async function startPracticeRecording() {
     $("stop-button").disabled = false;
 
     showMessage("Aufnahme läuft. Tippe auf „Fertig“, wenn du fertig bist.");
-
-    await logEvent("recording_started", item, {
-      mode: "practice"
-    });
+    await logEvent("recording_started", item, { mode: "practice" });
   } catch (error) {
     console.error(error);
     stopMediaTracks();
@@ -803,7 +800,6 @@ function onWordCheckRecorderStarted(item) {
   $("stop-button").disabled = false;
 
   showMessage("Aufnahme läuft …");
-
   logEvent("word_check_started", item, {
     timeLimitMs: WORD_CHECK_LIMIT_MS
   });
@@ -836,7 +832,6 @@ function stopRecordingManually() {
 
   manualStop = true;
   clearRecordingTimers();
-
   $("stop-button").disabled = true;
   mediaRecorder.stop();
 }
@@ -908,9 +903,8 @@ async function finishRecording() {
     return;
   }
 
-  const recorderMimeType = mediaRecorder.mimeType || "audio/webm";
   const sourceBlob = new Blob(recordingChunks, {
-    type: recorderMimeType
+    type: mediaRecorder.mimeType || "audio/webm"
   });
 
   recordingChunks = [];
@@ -923,8 +917,7 @@ async function finishRecording() {
     $("timer-label").textContent = "Aufnahme beendet";
     $("timer-countdown").textContent =
       (durationMs / 1000).toFixed(1);
-    $("timer-help").textContent =
-      "Die Antwort wird jetzt bewertet.";
+    $("timer-help").textContent = "Die Antwort wird jetzt bewertet.";
   }
 
   if (!sourceBlob.size) {
@@ -945,12 +938,7 @@ async function finishRecording() {
   await logEvent(
     mode === "word_check" ? "word_check_completed" : "recording_stopped",
     item,
-    {
-      mode,
-      durationMs,
-      timeLimitMs,
-      endReason
-    }
+    { mode, durationMs, timeLimitMs, endReason }
   );
 
   await evaluateRecording({
@@ -989,12 +977,12 @@ async function evaluateRecording({
     originalWavBlob = await convertBlobToWav(sourceBlob);
     trimmedAudio = await trimSilenceFromWav(originalWavBlob);
   } catch (error) {
-    console.error(error);
+    console.error("Audio conversion/trim failed:", error);
     resetRecordingUi();
     setBusy(false);
     updateWordCheckButton();
     showMessage(
-      "Audio konnte nicht verarbeitet werden. Bitte erneut versuchen.",
+      `Audio konnte nicht verarbeitet werden: ${error.message || error}`,
       true
     );
     return;
@@ -1024,7 +1012,7 @@ async function evaluateRecording({
     updateWordCheckButton();
 
     showMessage(
-      "Keine Sprache erkannt. Bitte sprich näher ans Mikrofon oder etwas lauter und versuche es erneut.",
+      "Keine Sprache erkannt. Bitte sprich etwas lauter und versuche es erneut.",
       true
     );
     return;
@@ -1221,39 +1209,37 @@ async function saveNoSpeechAttempt({
     originalWavBlob
   );
 
-  const attempt = {
-    client_attempt_id: attemptId,
-    user_id: currentUser.id,
-    item_id: item.id,
-    test_run_id: null,
-    mode,
-    attempt_number: attemptNumber,
-    client_started_at: startedAt
-      ? new Date(startedAt).toISOString()
-      : null,
-    prompt_finished_at: promptTime
-      ? new Date(promptTime).toISOString()
-      : null,
-    response_duration_ms: durationMs,
-    time_limit_ms: timeLimitMs,
-    recording_end_reason: endReason,
-    used_translation: mode === "word_check"
-      ? false
-      : usedTranslationForCurrentItem,
-    used_tts_audio: mode === "word_check"
-      ? false
-      : usedAudioForCurrentItem,
-    final_score: null,
-    audio_path: uploadError ? null : audioPath,
-    evaluation_status: "error",
-    evaluation_error: "No speech detected after edge silence trimming.",
-    model_name: null,
-    model_version: "edge-trim-v1"
-  };
-
   const { error: insertError } = await supabaseClient
     .from("learn_attempts")
-    .insert(attempt);
+    .insert({
+      client_attempt_id: attemptId,
+      user_id: currentUser.id,
+      item_id: item.id,
+      test_run_id: null,
+      mode,
+      attempt_number: attemptNumber,
+      client_started_at: startedAt
+        ? new Date(startedAt).toISOString()
+        : null,
+      prompt_finished_at: promptTime
+        ? new Date(promptTime).toISOString()
+        : null,
+      response_duration_ms: durationMs,
+      time_limit_ms: timeLimitMs,
+      recording_end_reason: endReason,
+      used_translation: mode === "word_check"
+        ? false
+        : usedTranslationForCurrentItem,
+      used_tts_audio: mode === "word_check"
+        ? false
+        : usedAudioForCurrentItem,
+      final_score: null,
+      audio_path: uploadError ? null : audioPath,
+      evaluation_status: "error",
+      evaluation_error:
+        "No speech detected after edge silence trimming.",
+      model_version: "edge-trim-v1"
+    });
 
   if (insertError) {
     console.error("Could not save no-speech attempt:", insertError);
@@ -1264,6 +1250,65 @@ async function saveNoSpeechAttempt({
   }
 }
 
+/*
+ * Converts the browser's MediaRecorder format (usually WebM/Opus)
+ * into mono, 16 kHz PCM WAV for the APIs and trimming step.
+ */
+async function convertBlobToWav(blob) {
+  const AudioContextClass =
+    window.AudioContext || window.webkitAudioContext;
+
+  if (!AudioContextClass) {
+    throw new Error("Web Audio API ist nicht verfügbar.");
+  }
+
+  const context = new AudioContextClass();
+
+  try {
+    const input = await context.decodeAudioData(
+      await blob.arrayBuffer()
+    );
+
+    const outputRate = AUDIO_SAMPLE_RATE;
+    const ratio = input.sampleRate / outputRate;
+    const outputLength = Math.max(
+      1,
+      Math.ceil(input.length / ratio)
+    );
+
+    const mono = new Float32Array(outputLength);
+
+    for (let channel = 0; channel < input.numberOfChannels; channel++) {
+      const source = input.getChannelData(channel);
+
+      for (let index = 0; index < outputLength; index++) {
+        const sourcePosition = index * ratio;
+        const left = Math.min(
+          Math.floor(sourcePosition),
+          source.length - 1
+        );
+        const right = Math.min(left + 1, source.length - 1);
+        const fraction = sourcePosition - left;
+
+        const sample =
+          source[left] * (1 - fraction) +
+          source[right] * fraction;
+
+        mono[index] += sample / input.numberOfChannels;
+      }
+    }
+
+    return encodeWav(mono, outputRate);
+  } finally {
+    await context.close();
+  }
+}
+
+/*
+ * Trims only leading and trailing low-level audio. Internal pauses
+ * remain untouched. Returns the original WAV if no speech is found,
+ * so the caller can handle it as a no-speech attempt.
+ */
 async function trimSilenceFromWav(wavBlob) {
   const AudioContextClass =
     window.AudioContext || window.webkitAudioContext;
@@ -1280,7 +1325,6 @@ async function trimSilenceFromWav(wavBlob) {
     );
 
     const sampleRate = decoded.sampleRate;
-    const channelCount = decoded.numberOfChannels;
     const samples = decoded.getChannelData(0);
 
     const windowSize = Math.max(
@@ -1288,58 +1332,54 @@ async function trimSilenceFromWav(wavBlob) {
       Math.round(sampleRate * SILENCE_WINDOW_MS / 1000)
     );
 
-    const windowRms = [];
+    const windows = [];
 
     for (let start = 0; start < samples.length; start += windowSize) {
       const end = Math.min(start + windowSize, samples.length);
       let sumSquares = 0;
 
       for (let index = start; index < end; index++) {
-        const value = samples[index];
-        sumSquares += value * value;
+        sumSquares += samples[index] * samples[index];
       }
 
-      windowRms.push({
+      windows.push({
         start,
         end,
         rms: Math.sqrt(sumSquares / Math.max(1, end - start))
       });
     }
 
-    const peakWindowRms = windowRms.reduce(
+    const peakRms = windows.reduce(
       (peak, window) => Math.max(peak, window.rms),
       0
     );
 
     const threshold = Math.max(
       ABSOLUTE_SPEECH_THRESHOLD,
-      peakWindowRms * RELATIVE_SPEECH_THRESHOLD
+      peakRms * RELATIVE_SPEECH_THRESHOLD
     );
 
-    const activeWindows = windowRms.filter(
+    const activeWindows = windows.filter(
       window => window.rms >= threshold
     );
 
-    // Ignore isolated clicks/noise shorter than about 40 ms.
+    const originalDurationMs =
+      decoded.length / sampleRate * 1000;
+
     if (
-      activeWindows.length < 2 ||
-      peakWindowRms < ABSOLUTE_SPEECH_THRESHOLD
+      peakRms < ABSOLUTE_SPEECH_THRESHOLD ||
+      activeWindows.length < 2
     ) {
       return {
         blob: wavBlob,
         hasSpeech: false,
-        originalDurationMs:
-          decoded.length / sampleRate * 1000,
-        trimmedDurationMs:
-          decoded.length / sampleRate * 1000,
+        originalDurationMs,
+        trimmedDurationMs: originalDurationMs,
         trimStartMs: 0,
         trimEndMs: 0,
         threshold
       };
     }
-
-    const firstActive = activeWindows[0];
-    const lastActive = activeWindows[activeWindows.length - 1];
 
     const paddingSamples = Math.round(
       sampleRate * SILENCE_PADDING_MS / 1000
@@ -1347,12 +1387,12 @@ async function trimSilenceFromWav(wavBlob) {
 
     const startSample = Math.max(
       0,
-      firstActive.start - paddingSamples
+      activeWindows[0].start - paddingSamples
     );
 
     const endSample = Math.min(
       decoded.length,
-      lastActive.end + paddingSamples
+      activeWindows[activeWindows.length - 1].end + paddingSamples
     );
 
     const frameCount = endSample - startSample;
@@ -1361,70 +1401,26 @@ async function trimSilenceFromWav(wavBlob) {
       return {
         blob: wavBlob,
         hasSpeech: false,
-        originalDurationMs:
-          decoded.length / sampleRate * 1000,
-        trimmedDurationMs:
-          decoded.length / sampleRate * 1000,
+        originalDurationMs,
+        trimmedDurationMs: originalDurationMs,
         trimStartMs: 0,
         trimEndMs: 0,
         threshold
       };
     }
 
-    const trimmedChannels = [];
+    const monoOutput = new Float32Array(frameCount);
+    const source = decoded.getChannelData(0);
 
-    for (let channel = 0; channel < channelCount; channel++) {
-      const source = decoded.getChannelData(channel);
-      trimmedChannels.push(
-        source.slice(startSample, endSample)
-      );
-    }
+    monoOutput.set(source.slice(startSample, endSample));
 
-    const outputLength = Math.max(
-      1,
-      Math.ceil(frameCount * AUDIO_SAMPLE_RATE / sampleRate)
-    );
-
-    const monoOutput = new Float32Array(outputLength);
-
-    for (let outputIndex = 0; outputIndex < outputLength; outputIndex++) {
-      const sourcePosition =
-        outputIndex * sampleRate / AUDIO_SAMPLE_RATE;
-
-      const left = Math.min(
-        Math.floor(sourcePosition),
-        frameCount - 1
-      );
-
-      const right = Math.min(left + 1, frameCount - 1);
-      const fraction = sourcePosition - left;
-      let channelSum = 0;
-
-      for (const channelSamples of trimmedChannels) {
-        channelSum +=
-          channelSamples[left] * (1 - fraction) +
-          channelSamples[right] * fraction;
-      }
-
-      monoOutput[outputIndex] = channelSum / channelCount;
-    }
-
-    const trimmedBlob = encodeWav(
-      monoOutput,
-      AUDIO_SAMPLE_RATE
-    );
-
-    const originalDurationMs =
-      decoded.length / sampleRate * 1000;
-
-    const trimmedDurationMs =
-      outputLength / AUDIO_SAMPLE_RATE * 1000;
+    const trimmedBlob = encodeWav(monoOutput, sampleRate);
 
     return {
       blob: trimmedBlob,
       hasSpeech: true,
       originalDurationMs,
-      trimmedDurationMs,
+      trimmedDurationMs: frameCount / sampleRate * 1000,
       trimStartMs: startSample / sampleRate * 1000,
       trimEndMs: (decoded.length - endSample) / sampleRate * 1000,
       threshold
@@ -1473,93 +1469,6 @@ function writeAscii(view, offset, text) {
   for (let index = 0; index < text.length; index++) {
     view.setUint8(offset + index, text.charCodeAt(index));
   }
-}
-
-function showEvaluation({
-  item,
-  whisper,
-  pronunciation,
-  finalScore,
-  errors,
-  mode
-}) {
-  const panel = $("evaluation-panel");
-  const result = $("evaluation-result");
-  result.replaceChildren();
-
-  const addLine = text => {
-    const div = document.createElement("div");
-    div.className = "evaluation-line";
-    div.textContent = text;
-    result.appendChild(div);
-  };
-
-  if (whisper) {
-    const recognized =
-      normalizeWord(whisper.text) === normalizeWord(item.target_de);
-
-    addLine(
-      `Whisper: "${whisper.text}" — ` +
-      (recognized ? "Zielwort erkannt" : "Zielwort nicht exakt erkannt")
-    );
-  } else {
-    addLine("Whisper: keine verwertbare Transkription.");
-  }
-
-  if (pronunciation) {
-    addLine(
-      `${PRONUNCIATION_MODEL}: ` +
-      (pronunciation.match
-        ? "Aussprache akzeptiert"
-        : "Aussprache nicht akzeptiert")
-    );
-
-    if (pronunciation.ipa) {
-      addLine(`Erkannte Lautfolge: ${pronunciation.ipa}`);
-    }
-
-    if (pronunciation.usage) {
-      addLine(
-        `Tokens: ${pronunciation.usage.prompt_tokens ?? "—"} Input / ` +
-        `${pronunciation.usage.completion_tokens ?? "—"} Output`
-      );
-    }
-
-    if (pronunciation.cost !== null) {
-      addLine(
-        `Modellkosten: ${Number(pronunciation.cost).toFixed(6)} USD`
-      );
-    }
-
-    if (pronunciation.notice) {
-      addLine(`NanoGPT-Hinweis: ${pronunciation.notice}`);
-    }
-  } else {
-    addLine("Aussprachemodell: keine verwertbare Bewertung.");
-  }
-
-  if (finalScore !== null) {
-    const scoreLine = document.createElement("div");
-    scoreLine.className = "score";
-    scoreLine.textContent = `Score: ${finalScore}`;
-    result.appendChild(scoreLine);
-  } else {
-    addLine("Kein Score: technische Bewertung unvollständig.");
-  }
-
-  if (mode === "word_check") {
-    addLine(
-      finalScore === 1
-        ? "Wort-Check bestanden."
-        : "Wort-Check nicht bestanden; du kannst weiter üben."
-    );
-  }
-
-  if (errors.length) {
-    addLine(`Technische Hinweise: ${errors.join(" | ")}`);
-  }
-
-  panel.classList.remove("hidden");
 }
 
 function errorText(error) {
@@ -1780,6 +1689,93 @@ async function blobToBase64(blob) {
   }
 
   return btoa(binary);
+}
+
+function showEvaluation({
+  item,
+  whisper,
+  pronunciation,
+  finalScore,
+  errors,
+  mode
+}) {
+  const panel = $("evaluation-panel");
+  const result = $("evaluation-result");
+  result.replaceChildren();
+
+  const addLine = text => {
+    const div = document.createElement("div");
+    div.className = "evaluation-line";
+    div.textContent = text;
+    result.appendChild(div);
+  };
+
+  if (whisper) {
+    const recognized =
+      normalizeWord(whisper.text) === normalizeWord(item.target_de);
+
+    addLine(
+      `Whisper: "${whisper.text}" — ` +
+      (recognized ? "Zielwort erkannt" : "Zielwort nicht exakt erkannt")
+    );
+  } else {
+    addLine("Whisper: keine verwertbare Transkription.");
+  }
+
+  if (pronunciation) {
+    addLine(
+      `${PRONUNCIATION_MODEL}: ` +
+      (pronunciation.match
+        ? "Aussprache akzeptiert"
+        : "Aussprache nicht akzeptiert")
+    );
+
+    if (pronunciation.ipa) {
+      addLine(`Erkannte Lautfolge: ${pronunciation.ipa}`);
+    }
+
+    if (pronunciation.usage) {
+      addLine(
+        `Tokens: ${pronunciation.usage.prompt_tokens ?? "—"} Input / ` +
+        `${pronunciation.usage.completion_tokens ?? "—"} Output`
+      );
+    }
+
+    if (pronunciation.cost !== null) {
+      addLine(
+        `Modellkosten: ${Number(pronunciation.cost).toFixed(6)} USD`
+      );
+    }
+
+    if (pronunciation.notice) {
+      addLine(`NanoGPT-Hinweis: ${pronunciation.notice}`);
+    }
+  } else {
+    addLine("Aussprachemodell: keine verwertbare Bewertung.");
+  }
+
+  if (finalScore !== null) {
+    const scoreLine = document.createElement("div");
+    scoreLine.className = "score";
+    scoreLine.textContent = `Score: ${finalScore}`;
+    result.appendChild(scoreLine);
+  } else {
+    addLine("Kein Score: technische Bewertung unvollständig.");
+  }
+
+  if (mode === "word_check") {
+    addLine(
+      finalScore === 1
+        ? "Wort-Check bestanden."
+        : "Wort-Check nicht bestanden; du kannst weiter üben."
+    );
+  }
+
+  if (errors.length) {
+    addLine(`Technische Hinweise: ${errors.join(" | ")}`);
+  }
+
+  panel.classList.remove("hidden");
 }
 
 $("login-form").addEventListener("submit", async event => {
