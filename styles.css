@@ -31,15 +31,6 @@ h2 {
   font-size: 1.05rem;
 }
 
-.card {
-  margin: 12px 0;
-  padding: 16px;
-  background: #fff;
-  border: 1px solid #d9e0e6;
-  border-radius: 14px;
-  box-shadow: 0 2px 8px #1020300d;
-}
-
 label {
   display: block;
   margin: 12px 0 6px;
@@ -132,11 +123,43 @@ summary:focus-visible {
   margin-top: 8px;
 }
 
+.progress-box {
+  display: grid;
+  gap: 5px;
+  margin-top: 14px;
+  padding: 12px;
+  background: #f0f4f7;
+  border: 1px solid #d9e0e6;
+  border-radius: 10px;
+}
+
+.word-status-row {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 5px 10px;
+  color: #53616f;
+  background: #edf1f4;
+  border-radius: 999px;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.status-badge.passed {
+  color: #176438;
+  background: #e4f4e9;
+}
+
 .prompt {
   min-height: 150px;
   display: grid;
   place-items: center;
-  margin: 16px 0;
+  margin: 12px 0 16px;
   padding: 24px 14px;
   text-align: center;
   font-size: clamp(1.6rem, 8vw, 2.4rem);
@@ -155,6 +178,31 @@ summary:focus-visible {
   background: #edf7ef;
   border: 1px solid #c6e3cc;
   border-radius: 10px;
+}
+
+.timer-panel {
+  margin: 12px 0;
+  padding: 16px;
+  text-align: center;
+  background: #fff4dc;
+  border: 1px solid #e9ce92;
+  border-radius: 12px;
+}
+
+#timer-label {
+  font-weight: 700;
+}
+
+#timer-countdown {
+  margin: 4px 0;
+  font-size: 2rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+#timer-help {
+  color: #53616f;
+  font-size: 0.9rem;
 }
 
 audio {
@@ -187,6 +235,7 @@ audio {
 
 .evaluation-line {
   margin: 5px 0;
+  overflow-wrap: anywhere;
 }
 
 .score {
