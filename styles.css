@@ -20,6 +20,15 @@ main {
   margin: 0 auto;
 }
 
+.card {
+  margin: 12px 0;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid #d9e0e6;
+  border-radius: 14px;
+  box-shadow: 0 2px 8px #1020300d;
+}
+
 h1 {
   margin: 6px 0 18px;
   font-size: 1.4rem;
@@ -131,6 +140,30 @@ summary:focus-visible {
   background: #f0f4f7;
   border: 1px solid #d9e0e6;
   border-radius: 10px;
+}
+
+.test-box {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 12px;
+  background: #f3effa;
+  border: 1px solid #d9c9eb;
+  border-radius: 10px;
+}
+
+.test-actions {
+  margin-top: 5px;
+}
+
+.test-button {
+  color: #fff;
+  background: #68449a;
+}
+
+.test-reward {
+  color: #4f3477;
+  font-weight: 750;
 }
 
 .word-status-row {
