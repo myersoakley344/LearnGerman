@@ -60,7 +60,9 @@
       <div id="lesson-title" class="muted lesson-title"></div>
 
       <section class="progress-box" aria-live="polite">
-        <strong id="word-check-progress">0 von 0 Wörter bestanden</strong>
+        <strong id="word-check-progress">
+          0 von 0 Wörtern erfolgreich getestet
+        </strong>
         <div id="test-unlock-status" class="muted"></div>
       </section>
 
@@ -74,10 +76,8 @@
 
       <div id="timer-panel" class="timer-panel hidden" aria-live="assertive">
         <div id="timer-label">Aufnahme läuft</div>
-        <div id="timer-countdown">3</div>
-        <div id="timer-help">
-          Sprich das deutsche Wort und tippe vorher auf „Fertig“.
-        </div>
+        <div id="timer-countdown">2.0</div>
+        <div id="timer-help"></div>
       </div>
 
       <div class="stack">
@@ -125,21 +125,6 @@
 
       <div id="app-message" class="message" role="status"></div>
     </section>
-
-    <details class="card settings">
-      <summary>Fikirana fanombanana</summary>
-
-      <label for="whisper-model">Whisper model ID</label>
-      <input
-        id="whisper-model"
-        type="text"
-        value="openai/whisper-large-v3"
-        autocomplete="off"
-      >
-      <p class="muted">
-        Ovay raha tsy eken'ny NanoGPT io model ID io.
-      </p>
-    </details>
   </section>
 </main>
 </body>
