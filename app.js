@@ -7,10 +7,8 @@ const SUPABASE_KEY =
   "sb_publishable_D0adyb95if5W2IH5WA9JOQ_ENePqpoh";
 
 const NANO_API_BASE = "https://api.nano-gpt.com/api/v1";
-const WHISPER_ENDPOINT = `${NANO_API_BASE}/audio/transcriptions`;
 const PRONUNCIATION_ENDPOINT = `${NANO_API_BASE}/chat/completions`;
 
-const WHISPER_DEFAULT_MODEL = "openai/whisper-large-v3";
 const PRONUNCIATION_MODEL = "google/gemini-4-carbon";
 
 const RECORDING_BUCKET = "learn-recordings";
@@ -144,6 +142,7 @@ function costFromObject(data) {
   if (!data || typeof data !== "object") return null;
 
   const pricing = data.x_nanogpt_pricing;
+
   if (pricing && typeof pricing === "object") {
     const amount = Number(pricing.amount ?? pricing.cost);
     if (Number.isFinite(amount)) return amount;
@@ -173,6 +172,7 @@ function costFromHeaders(headers) {
       if (Number.isFinite(amount)) return amount;
     } catch {
       const match = raw.match(/-?\d+(?:\.\d+)?/);
+
       if (match) {
         const amount = Number(match[0]);
         if (Number.isFinite(amount)) return amount;
@@ -199,6 +199,7 @@ async function lookupNanoCost(apiKey, requestId) {
     });
 
     if (!response.ok) return null;
+
     return costFromObject(await response.json());
   } catch (error) {
     console.warn("Could not look up NanoGPT cost:", error);
@@ -592,6 +593,7 @@ function renderItem() {
   $("skip-button").disabled = false;
 
   renderProgress();
+
   logEvent("item_shown", item, { index: currentIndex });
   showMessage("");
 }
@@ -832,6 +834,7 @@ function stopRecordingManually() {
 
   manualStop = true;
   clearRecordingTimers();
+
   $("stop-button").disabled = true;
   mediaRecorder.stop();
 }
@@ -917,7 +920,8 @@ async function finishRecording() {
     $("timer-label").textContent = "Aufnahme beendet";
     $("timer-countdown").textContent =
       (durationMs / 1000).toFixed(1);
-    $("timer-help").textContent = "Die Antwort wird jetzt bewertet.";
+    $("timer-help").textContent =
+      "Die Antwort wird jetzt bewertet.";
   }
 
   if (!sourceBlob.size) {
@@ -965,9 +969,6 @@ async function evaluateRecording({
 }) {
   setBusy(true);
   showMessage("Valiny dinihina... / Checking your answer...");
-
-  const whisperModel =
-    $("whisper-model").value.trim() || WHISPER_DEFAULT_MODEL;
 
   const attemptId = crypto.randomUUID();
   let originalWavBlob;
@@ -1018,14 +1019,9 @@ async function evaluateRecording({
     return;
   }
 
-  const [uploadResult, whisperResult, pronunciationResult] =
+  const [uploadResult, pronunciationResult] =
     await Promise.allSettled([
       uploadRecording(audioPath, originalWavBlob),
-      callWhisper({
-        apiKey: currentApiKey,
-        model: whisperModel,
-        wavBlob: trimmedAudio.blob
-      }),
       callPronunciationModel({
         apiKey: currentApiKey,
         item,
@@ -1034,25 +1030,26 @@ async function evaluateRecording({
     ]);
 
   const uploadSucceeded = uploadResult.status === "fulfilled";
-  const whisperSucceeded = whisperResult.status === "fulfilled";
   const pronunciationSucceeded =
     pronunciationResult.status === "fulfilled";
 
-  const whisper = whisperSucceeded ? whisperResult.value : null;
-  const pronunciation =
-    pronunciationSucceeded ? pronunciationResult.value : null;
+  const pronunciation = pronunciationSucceeded
+    ? pronunciationResult.value
+    : null;
 
-  let finalScore = null;
   let recognized = null;
+  let finalScore = null;
   let phonemeScore = null;
   let evaluationStatus = "complete";
   const errors = [];
 
-  if (whisperSucceeded && pronunciationSucceeded) {
+  if (pronunciationSucceeded) {
     recognized =
-      normalizeWord(whisper.text) === normalizeWord(item.target_de);
+      normalizeWord(pronunciation.heardText) ===
+      normalizeWord(item.target_de);
 
     phonemeScore = pronunciation.match ? 1 : 0;
+
     finalScore = !recognized
       ? 0
       : pronunciation.match
@@ -1060,16 +1057,9 @@ async function evaluateRecording({
         : 0.75;
   } else {
     evaluationStatus = "error";
-
-    if (!whisperSucceeded) {
-      errors.push(`Whisper: ${errorText(whisperResult.reason)}`);
-    }
-
-    if (!pronunciationSucceeded) {
-      errors.push(
-        `Aussprachemodell: ${errorText(pronunciationResult.reason)}`
-      );
-    }
+    errors.push(
+      `Carbon: ${errorText(pronunciationResult.reason)}`
+    );
   }
 
   if (!uploadSucceeded) {
@@ -1103,7 +1093,7 @@ async function evaluateRecording({
     used_tts_audio: isWordCheck
       ? false
       : usedAudioForCurrentItem,
-    stt_transcript: whisper?.text || null,
+    stt_transcript: pronunciation?.heardText || null,
     target_word_recognized: recognized,
     phoneme_transcription: pronunciation?.ipa || null,
     phoneme_score: phonemeScore,
@@ -1111,9 +1101,10 @@ async function evaluateRecording({
     audio_path: uploadSucceeded ? audioPath : null,
     evaluation_status: evaluationStatus,
     evaluation_error: errors.length ? errors.join("\n") : null,
-    model_name: `${whisperModel} + ${PRONUNCIATION_MODEL}`,
+    model_name: PRONUNCIATION_MODEL,
     model_version:
-      "NanoGPT API; reasoning_effort=low; max_tokens=1024; edge-trim=v1"
+      "NanoGPT Carbon combined transcript+IPA+pronunciation; " +
+      "reasoning_effort=low; max_tokens=1024; edge-trim=v1"
   };
 
   const { data: attemptData, error: attemptInsertError } =
@@ -1131,18 +1122,6 @@ async function evaluateRecording({
   const savedAttemptId = attemptData?.id || null;
 
   await logApiUsage({
-    requestId: whisper?.requestId || null,
-    attemptId: savedAttemptId,
-    itemId: item.id,
-    operation: "stt",
-    model: whisperModel,
-    status: whisper ? "success" : "error",
-    cost: whisper?.cost ?? null,
-    usage: whisper?.usage ?? null,
-    audioDurationMs: trimmedAudio.trimmedDurationMs
-  });
-
-  await logApiUsage({
     requestId: pronunciation?.requestId || null,
     attemptId: savedAttemptId,
     itemId: item.id,
@@ -1158,8 +1137,8 @@ async function evaluateRecording({
 
   showEvaluation({
     item,
-    whisper,
     pronunciation,
+    recognized,
     finalScore,
     errors,
     mode
@@ -1250,10 +1229,6 @@ async function saveNoSpeechAttempt({
   }
 }
 
-/*
- * Converts the browser's MediaRecorder format (usually WebM/Opus)
- * into mono, 16 kHz PCM WAV for the APIs and trimming step.
- */
 async function convertBlobToWav(blob) {
   const AudioContextClass =
     window.AudioContext || window.webkitAudioContext;
@@ -1289,7 +1264,6 @@ async function convertBlobToWav(blob) {
         );
         const right = Math.min(left + 1, source.length - 1);
         const fraction = sourcePosition - left;
-
         const sample =
           source[left] * (1 - fraction) +
           source[right] * fraction;
@@ -1304,11 +1278,6 @@ async function convertBlobToWav(blob) {
   }
 }
 
-/*
- * Trims only leading and trailing low-level audio. Internal pauses
- * remain untouched. Returns the original WAV if no speech is found,
- * so the caller can handle it as a no-speech attempt.
- */
 async function trimSilenceFromWav(wavBlob) {
   const AudioContextClass =
     window.AudioContext || window.webkitAudioContext;
@@ -1410,9 +1379,9 @@ async function trimSilenceFromWav(wavBlob) {
     }
 
     const monoOutput = new Float32Array(frameCount);
-    const source = decoded.getChannelData(0);
-
-    monoOutput.set(source.slice(startSample, endSample));
+    monoOutput.set(
+      decoded.getChannelData(0).slice(startSample, endSample)
+    );
 
     const trimmedBlob = encodeWav(monoOutput, sampleRate);
 
@@ -1471,9 +1440,17 @@ function writeAscii(view, offset, text) {
   }
 }
 
-function errorText(error) {
-  if (!error) return "Unbekannter Fehler";
-  return error.message || String(error);
+async function uploadRecording(path, blob) {
+  const { error } = await supabaseClient
+    .storage
+    .from(RECORDING_BUCKET)
+    .upload(path, blob, {
+      contentType: "audio/wav",
+      upsert: false
+    });
+
+  if (error) throw error;
+  return path;
 }
 
 async function getNextAttemptNumber(itemId, mode) {
@@ -1492,86 +1469,22 @@ async function getNextAttemptNumber(itemId, mode) {
   return (count || 0) + 1;
 }
 
-async function uploadRecording(path, blob) {
-  const { error } = await supabaseClient
-    .storage
-    .from(RECORDING_BUCKET)
-    .upload(path, blob, {
-      contentType: "audio/wav",
-      upsert: false
-    });
-
-  if (error) throw error;
-  return path;
-}
-
-async function callWhisper({ apiKey, model, wavBlob }) {
-  const form = new FormData();
-  form.append("model", model);
-  form.append("file", wavBlob, "answer.wav");
-  form.append("language", "de");
-  form.append("response_format", "json");
-
-  const response = await fetch(WHISPER_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "Accept": "application/json"
-    },
-    body: form
-  });
-
-  const requestId = response.headers.get("x-request-id");
-  const bodyText = await response.text();
-
-  if (!response.ok) {
-    throw new Error(
-      `HTTP ${response.status}: ${bodyText.slice(0, 700)}`
-    );
-  }
-
-  let data;
-
-  try {
-    data = JSON.parse(bodyText);
-  } catch {
-    throw new Error(
-      `Whisper-Antwort war kein JSON: ${bodyText.slice(0, 500)}`
-    );
-  }
-
-  const text = String(data.text || "").trim();
-
-  if (!text) {
-    throw new Error("Whisper lieferte kein Transkript.");
-  }
-
-  let cost = costFromHeaders(response.headers);
-  if (cost === null) cost = costFromObject(data);
-  if (cost === null) {
-    cost = await lookupNanoCost(apiKey, requestId);
-  }
-
-  return {
-    text,
-    requestId,
-    cost,
-    usage: data.usage || null
-  };
-}
-
 async function callPronunciationModel({ apiKey, item, wavBlob }) {
   const base64Audio = await blobToBase64(wavBlob);
 
   const prompt =
-    "Analysiere das Audio in zwei Schritten. " +
-    "1. Bestimme ausschließlich aus dem Audio die tatsächlich gesprochene " +
-    "deutsche Lautfolge in breiter IPA-Notation. " +
-    "2. Vergleiche sie mit einer akzeptablen Standardaussprache des " +
-    "Referenztexts. Akzeptiere normale Akzentvariation, aber nicht deutlich " +
-    "falsche, ausgelassene oder hinzugefügte Laute. " +
-    "Antworte ausschließlich als JSON mit den Feldern ipa und match, " +
-    "ohne Markdown oder Erklärung. " +
+    "Analysiere das deutsche Audio. " +
+    "Schritt 1: Transkribiere nur tatsächlich hörbare deutsche Wörter " +
+    "und bestimme die gehörte Lautfolge in breiter IPA-Notation. " +
+    "Verwende den Referenztext für diese beiden Felder nicht. " +
+    "Wenn keine verständliche Sprache zu hören ist, gib für heard_text " +
+    "einen leeren String und für ipa einen leeren String zurück. " +
+    "Schritt 2: Vergleiche die gehörte Aussprache mit einer akzeptablen " +
+    "Standardaussprache des Referenztexts. Akzeptiere normale " +
+    "Akzentvariation, aber nicht deutlich falsche, ausgelassene oder " +
+    "hinzugefügte Laute. " +
+    "Antworte ausschließlich als JSON mit den Feldern heard_text, ipa " +
+    "und pronunciation_match. Keine Erklärung und kein Markdown. " +
     `Referenztext: ${item.target_de}`;
 
   const response = await fetch(PRONUNCIATION_ENDPOINT, {
@@ -1619,7 +1532,7 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
     data = JSON.parse(bodyText);
   } catch {
     throw new Error(
-      `Aussprachemodell lieferte kein JSON: ${bodyText.slice(0, 500)}`
+      `Carbon-Antwort war kein JSON: ${bodyText.slice(0, 500)}`
     );
   }
 
@@ -1642,7 +1555,7 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
       : "";
 
     throw new Error(
-      `Kein JSON in der Ausspracheantwort gefunden: ` +
+      `Kein JSON in der Carbon-Antwort gefunden: ` +
       `${content.slice(0, 500)}.${notice}`
     );
   }
@@ -1653,23 +1566,36 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
     result = JSON.parse(jsonMatch[0]);
   } catch {
     throw new Error(
-      `Ungültiges Aussprache-JSON: ${jsonMatch[0].slice(0, 500)}`
+      `Ungültiges Carbon-JSON: ${jsonMatch[0].slice(0, 500)}`
     );
   }
 
-  if (typeof result.match !== "boolean") {
-    throw new Error("Antwort enthält kein boolesches Feld 'match'.");
+  if (typeof result.heard_text !== "string") {
+    throw new Error("Carbon-Antwort enthält kein Textfeld 'heard_text'.");
+  }
+
+  if (typeof result.ipa !== "string") {
+    throw new Error("Carbon-Antwort enthält kein Textfeld 'ipa'.");
+  }
+
+  if (typeof result.pronunciation_match !== "boolean") {
+    throw new Error(
+      "Carbon-Antwort enthält kein boolesches Feld " +
+      "'pronunciation_match'."
+    );
   }
 
   let cost = costFromHeaders(response.headers);
   if (cost === null) cost = costFromObject(data);
+
   if (cost === null) {
     cost = await lookupNanoCost(apiKey, requestId);
   }
 
   return {
-    ipa: String(result.ipa || ""),
-    match: result.match,
+    heardText: result.heard_text.trim(),
+    ipa: result.ipa.trim(),
+    match: result.pronunciation_match,
     requestId,
     cost,
     usage: data.usage || null,
@@ -1693,8 +1619,8 @@ async function blobToBase64(blob) {
 
 function showEvaluation({
   item,
-  whisper,
   pronunciation,
+  recognized,
   finalScore,
   errors,
   mode
@@ -1710,21 +1636,14 @@ function showEvaluation({
     result.appendChild(div);
   };
 
-  if (whisper) {
-    const recognized =
-      normalizeWord(whisper.text) === normalizeWord(item.target_de);
-
-    addLine(
-      `Whisper: "${whisper.text}" — ` +
-      (recognized ? "Zielwort erkannt" : "Zielwort nicht exakt erkannt")
-    );
-  } else {
-    addLine("Whisper: keine verwertbare Transkription.");
-  }
-
   if (pronunciation) {
     addLine(
-      `${PRONUNCIATION_MODEL}: ` +
+      `Carbon-Transkript: "${pronunciation.heardText || "(leer)"}" — ` +
+      (recognized ? "Zielwort erkannt" : "Zielwort nicht exakt erkannt")
+    );
+
+    addLine(
+      `Carbon-Aussprache: ` +
       (pronunciation.match
         ? "Aussprache akzeptiert"
         : "Aussprache nicht akzeptiert")
@@ -1751,7 +1670,7 @@ function showEvaluation({
       addLine(`NanoGPT-Hinweis: ${pronunciation.notice}`);
     }
   } else {
-    addLine("Aussprachemodell: keine verwertbare Bewertung.");
+    addLine("Carbon: keine verwertbare Bewertung.");
   }
 
   if (finalScore !== null) {
@@ -1776,6 +1695,11 @@ function showEvaluation({
   }
 
   panel.classList.remove("hidden");
+}
+
+function errorText(error) {
+  if (!error) return "Unbekannter Fehler";
+  return error.message || String(error);
 }
 
 $("login-form").addEventListener("submit", async event => {
