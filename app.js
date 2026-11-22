@@ -14,7 +14,10 @@ const PRONUNCIATION_MODEL = "google/gemini-4-carbon";
 const RECORDING_BUCKET = "learn-recordings";
 const TTS_BUCKET = "learn-tts";
 
-const WORD_CHECK_LIMIT_MS = 2000;
+const PRACTICE_RECORDING_LIMIT_MS = 20_000;
+const WORD_CHECK_LIMIT_MS = 2_000;
+const RECORDING_CHUNK_MS = 100;
+const RECORDING_CHUNK_GRACE_MS = 250;
 const REQUIRED_SUCCESSES_PER_WORD = 3;
 
 const AUDIO_SAMPLE_RATE = 16000;
@@ -42,6 +45,7 @@ let mediaRecorder = null;
 let recordingStream = null;
 let recordingChunks = [];
 let recordingStartedAt = null;
+let recordingStartedMonotonic = null;
 let recordingMode = null;
 let recordingItem = null;
 let recordingDeadlineTimer = null;
@@ -199,7 +203,6 @@ async function lookupNanoCost(apiKey, requestId) {
     });
 
     if (!response.ok) return null;
-
     return costFromObject(await response.json());
   } catch (error) {
     console.warn("Could not look up NanoGPT cost:", error);
@@ -593,7 +596,6 @@ function renderItem() {
   $("skip-button").disabled = false;
 
   renderProgress();
-
   logEvent("item_shown", item, { index: currentIndex });
   showMessage("");
 }
@@ -648,6 +650,12 @@ function chooseRecorderMimeType() {
   ) || "";
 }
 
+function getRecordingLimitMs(mode) {
+  if (mode === "word_check") return WORD_CHECK_LIMIT_MS;
+  if (mode === "practice") return PRACTICE_RECORDING_LIMIT_MS;
+  return null;
+}
+
 async function requestAudioStream() {
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
     throw new Error(
@@ -677,18 +685,41 @@ function configureRecorder(stream, mode, item) {
   recordingChunks = [];
   recordingMode = mode;
   recordingItem = item;
-  recordingStartedAt = Date.now();
+  recordingStartedAt = null;
+  recordingStartedMonotonic = null;
   manualStop = false;
 
-  mediaRecorder.addEventListener("dataavailable", event => {
-    if (event.data?.size) recordingChunks.push(event.data);
-  });
-
   mediaRecorder.addEventListener(
-    "stop",
-    () => finishRecording(),
+    "start",
+    () => {
+      recordingStartedAt = Date.now();
+      recordingStartedMonotonic = performance.now();
+    },
     { once: true }
   );
+
+  mediaRecorder.addEventListener("dataavailable", event => {
+    if (!event.data?.size) return;
+
+    const limitMs = getRecordingLimitMs(recordingMode);
+    const elapsedMs = recordingStartedMonotonic === null
+      ? 0
+      : performance.now() - recordingStartedMonotonic;
+
+    if (
+      limitMs === null ||
+      elapsedMs <= limitMs + RECORDING_CHUNK_GRACE_MS
+    ) {
+      recordingChunks.push(event.data);
+      return;
+    }
+
+    // Do not retain late chunks if browser timers were delayed.
+    if (mediaRecorder?.state === "recording") {
+      manualStop = false;
+      mediaRecorder.stop();
+    }
+  });
 }
 
 async function startPracticeRecording() {
@@ -702,19 +733,20 @@ async function startPracticeRecording() {
 
   try {
     setBusy(true);
-    showMessage("Mikrofon wird vorbereitet …");
+    showMessage(
+      "Mikrofon wird vorbereitet … Die Aufnahme endet spätestens nach 20 Sekunden."
+    );
 
     const stream = await requestAudioStream();
     configureRecorder(stream, "practice", item);
-    mediaRecorder.start();
 
-    $("record-button").classList.add("hidden");
-    $("word-check-button").classList.add("hidden");
-    $("stop-button").classList.remove("hidden");
-    $("stop-button").disabled = false;
+    mediaRecorder.addEventListener(
+      "start",
+      () => onPracticeRecorderStarted(item),
+      { once: true }
+    );
 
-    showMessage("Aufnahme läuft. Tippe auf „Fertig“, wenn du fertig bist.");
-    await logEvent("recording_started", item, { mode: "practice" });
+    mediaRecorder.start(RECORDING_CHUNK_MS);
   } catch (error) {
     console.error(error);
     stopMediaTracks();
@@ -725,6 +757,29 @@ async function startPracticeRecording() {
       true
     );
   }
+}
+
+function onPracticeRecorderStarted(item) {
+  $("record-button").classList.add("hidden");
+  $("word-check-button").classList.add("hidden");
+  $("stop-button").classList.remove("hidden");
+  $("stop-button").disabled = false;
+
+  showMessage(
+    "Aufnahme läuft. Tippe auf „Fertig“; automatisch endet sie nach 20 Sekunden."
+  );
+
+  logEvent("recording_started", item, {
+    mode: "practice",
+    timeLimitMs: PRACTICE_RECORDING_LIMIT_MS
+  });
+
+  recordingDeadlineTimer = window.setTimeout(() => {
+    if (mediaRecorder?.state === "recording") {
+      manualStop = false;
+      mediaRecorder.stop();
+    }
+  }, PRACTICE_RECORDING_LIMIT_MS);
 }
 
 async function startWordCheck() {
@@ -766,7 +821,7 @@ async function startWordCheck() {
       { once: true }
     );
 
-    mediaRecorder.start();
+    mediaRecorder.start(RECORDING_CHUNK_MS);
   } catch (error) {
     console.error(error);
     stopMediaTracks();
@@ -802,6 +857,7 @@ function onWordCheckRecorderStarted(item) {
   $("stop-button").disabled = false;
 
   showMessage("Aufnahme läuft …");
+
   logEvent("word_check_started", item, {
     timeLimitMs: WORD_CHECK_LIMIT_MS
   });
@@ -875,17 +931,20 @@ async function finishRecording() {
   const item = recordingItem;
   const startedAt = recordingStartedAt;
   const promptTime = promptShownAt;
-  const timeLimitMs =
-    mode === "word_check" ? WORD_CHECK_LIMIT_MS : null;
+  const timeLimitMs = getRecordingLimitMs(mode);
 
-  let durationMs = Math.max(
-    0,
-    Date.now() - (startedAt || Date.now())
-  );
+  const endReason = manualStop ? "manual" : "deadline";
 
-  const endReason = mode === "word_check"
-    ? (manualStop ? "manual" : "deadline")
-    : "manual";
+  let durationMs = recordingStartedMonotonic === null
+    ? 0
+    : Math.max(
+        0,
+        performance.now() - recordingStartedMonotonic
+      );
+
+  if (timeLimitMs !== null) {
+    durationMs = Math.min(timeLimitMs, durationMs);
+  }
 
   if (mode === "word_check" && wordCheckStartedAt !== null) {
     durationMs = Math.min(
@@ -915,6 +974,7 @@ async function finishRecording() {
   recordingMode = null;
   recordingItem = null;
   recordingStartedAt = null;
+  recordingStartedMonotonic = null;
 
   if (mode === "word_check") {
     $("timer-label").textContent = "Aufnahme beendet";
@@ -928,11 +988,17 @@ async function finishRecording() {
     resetRecordingUi();
     setBusy(false);
     updateWordCheckButton();
-    showMessage("Keine Audiodaten aufgenommen. Bitte erneut versuchen.", true);
+    showMessage(
+      "Keine Audiodaten aufgenommen. Bitte erneut versuchen.",
+      true
+    );
     return;
   }
 
-  if (lastRecordingUrl) URL.revokeObjectURL(lastRecordingUrl);
+  if (lastRecordingUrl) {
+    URL.revokeObjectURL(lastRecordingUrl);
+  }
+
   lastRecordingUrl = URL.createObjectURL(sourceBlob);
 
   const recordingPlayer = $("recording-player");
@@ -1057,9 +1123,7 @@ async function evaluateRecording({
         : 0.75;
   } else {
     evaluationStatus = "error";
-    errors.push(
-      `Carbon: ${errorText(pronunciationResult.reason)}`
-    );
+    errors.push(`Carbon: ${errorText(pronunciationResult.reason)}`);
   }
 
   if (!uploadSucceeded) {
@@ -1119,11 +1183,9 @@ async function evaluateRecording({
     errors.push(`Datenbank: ${attemptInsertError.message}`);
   }
 
-  const savedAttemptId = attemptData?.id || null;
-
   await logApiUsage({
     requestId: pronunciation?.requestId || null,
-    attemptId: savedAttemptId,
+    attemptId: attemptData?.id || null,
     itemId: item.id,
     operation: "phoneme_analysis",
     model: PRONUNCIATION_MODEL,
@@ -1264,6 +1326,7 @@ async function convertBlobToWav(blob) {
         );
         const right = Math.min(left + 1, source.length - 1);
         const fraction = sourcePosition - left;
+
         const sample =
           source[left] * (1 - fraction) +
           source[right] * fraction;
@@ -1478,7 +1541,7 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
     "und bestimme die gehörte Lautfolge in breiter IPA-Notation. " +
     "Verwende den Referenztext für diese beiden Felder nicht. " +
     "Wenn keine verständliche Sprache zu hören ist, gib für heard_text " +
-    "einen leeren String und für ipa einen leeren String zurück. " +
+    "und ipa leere Strings zurück. " +
     "Schritt 2: Vergleiche die gehörte Aussprache mit einer akzeptablen " +
     "Standardaussprache des Referenztexts. Akzeptiere normale " +
     "Akzentvariation, aber nicht deutlich falsche, ausgelassene oder " +
@@ -1571,11 +1634,15 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
   }
 
   if (typeof result.heard_text !== "string") {
-    throw new Error("Carbon-Antwort enthält kein Textfeld 'heard_text'.");
+    throw new Error(
+      "Carbon-Antwort enthält kein Textfeld 'heard_text'."
+    );
   }
 
   if (typeof result.ipa !== "string") {
-    throw new Error("Carbon-Antwort enthält kein Textfeld 'ipa'.");
+    throw new Error(
+      "Carbon-Antwort enthält kein Textfeld 'ipa'."
+    );
   }
 
   if (typeof result.pronunciation_match !== "boolean") {
@@ -1586,7 +1653,10 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
   }
 
   let cost = costFromHeaders(response.headers);
-  if (cost === null) cost = costFromObject(data);
+
+  if (cost === null) {
+    cost = costFromObject(data);
+  }
 
   if (cost === null) {
     cost = await lookupNanoCost(apiKey, requestId);
