@@ -258,16 +258,36 @@ summary:focus-visible {
   display: none !important;
 }
 
-/* Die alte Hilfetext-Zahl im Test ausblenden; generische Meldung zeigen. */
-#app-screen:has(#test-abandon-button:not(.hidden))
-  :has(#timer-panel:not(.hidden)) #timer-help {
-  font-size: 0;
+/* Im vorbereiteten Wort-Check Fortschritt, Testbox, Status und Wort verdecken. */
+#app-screen.word-check-armed .progress-box,
+#app-screen.word-check-armed .test-box,
+#app-screen.word-check-armed .word-status-row {
+  display: none !important;
 }
 
-#app-screen:has(#test-abandon-button:not(.hidden))
-  :has(#timer-panel:not(.hidden)) #timer-help::after {
-  font-size: 0.9rem;
-  content: "Die Aufnahme endet automatisch.";
+#app-screen.word-check-armed #prompt {
+  color: transparent;
+  user-select: none;
+}
+
+#app-screen.word-check-armed #prompt::after {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px 14px;
+  color: #53616f;
+  font-size: 1.15rem;
+  font-weight: 650;
+  content: "Bereit für den Wort-Check";
+}
+
+#app-screen.word-check-armed:has(#timer-panel:not(.hidden)) #prompt {
+  color: #18212b;
+}
+
+#app-screen.word-check-armed:has(#timer-panel:not(.hidden)) #prompt::after {
+  content: none;
 }
 
 .translation {
@@ -349,6 +369,13 @@ audio {
   padding: 4px 0;
   font-weight: 700;
   cursor: pointer;
+}
+
+/* TEMPORÄR: Reset-Button für die Testphase; später entfernen */
+.dev-reset-box {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed #d9e0e6;
 }
 
 .hidden {
