@@ -1,4 +1,5 @@
 import {
+  completeTestRun,
   createTestRun,
   fetchLearnerAttempts,
   fetchLessonItems,
@@ -6,13 +7,16 @@ import {
   fetchTestRuns,
   getProfile,
   logEvent,
+  resetAllTests,
   updateTestRun
 } from "./api.js";
 import {
+  armWordCheck,
+  cancelWordCheck,
   setRecordingCallbacks,
   startPracticeRecording,
   startTestRecording,
-  startWordCheck,
+  startWordCheckRecording,
   stopRecordingManually
 } from "./recording.js";
 import {
@@ -87,9 +91,10 @@ async function loadLessons() {
 }
 
 async function loadItems(lessonId) {
-  if (state.testRunState?.active) {
+  if (state.testRunState?.active || state.wordCheckArmed) {
     showMessage(
-      "Während eines Lektionstests kann die Lektion nicht gewechselt werden."
+      "Während eines Tests oder Wort-Checks kann die Lektion nicht " +
+      "gewechselt werden."
     );
     return;
   }
@@ -109,6 +114,7 @@ async function loadItems(lessonId) {
   state.items = data || [];
   state.currentIndex = 0;
   state.testRunState = null;
+  state.wordCheckArmed = false;
 
   const lesson = state.lessons.find(value => value.id === lessonId);
   $("lesson-title").textContent = lesson?.title || "";
@@ -187,6 +193,8 @@ async function loadTestEligibility(lessonId) {
   state.testEligibility = {
     starts: 0,
     completed: false,
+    latestCompletedScore: null,
+    latestCompletedReward: null,
     loadFailed: false
   };
 
@@ -229,16 +237,29 @@ async function loadTestEligibility(lessonId) {
     }
   }
 
+  const validCompletedRun =
+    runs.find(run => run.status === "completed" && !run.voided_at) || null;
+
   state.testEligibility.starts = runs.length;
-  state.testEligibility.completed = runs.some(
-    run => run.status === "completed" && !run.voided_at
-  );
+  state.testEligibility.completed = Boolean(validCompletedRun);
+  state.testEligibility.latestCompletedScore = validCompletedRun
+    ? validCompletedRun.final_score
+    : null;
+  state.testEligibility.latestCompletedReward = validCompletedRun
+    ? validCompletedRun.final_reward_eur
+    : null;
 
   renderTestControls();
 }
 
 async function startLessonTest() {
-  if (state.isBusy || state.testRunState?.active) return;
+  if (
+    state.isBusy ||
+    state.wordCheckArmed ||
+    state.testRunState?.active
+  ) {
+    return;
+  }
 
   if (!state.currentApiKey) {
     showMessage("Bitte abmelden und erneut anmelden.", true);
@@ -251,7 +272,6 @@ async function startLessonTest() {
 
   if (
     state.testEligibility.loadFailed ||
-    state.testEligibility.completed ||
     state.testEligibility.starts >= MAX_TEST_STARTS ||
     getPreparedWordCount() < getRequiredPreparedWords()
   ) {
@@ -269,6 +289,21 @@ async function startLessonTest() {
       true
     );
     return;
+  }
+
+  if (state.testEligibility.completed) {
+    const previousReward = formatTestReward(
+      state.testEligibility.latestCompletedReward
+    );
+    const confirmed = window.confirm(
+      `Du hast bereits ein gültiges Testergebnis (${previousReward}). ` +
+      "Wenn du den neuen Durchgang vollständig abschließt, ersetzt er " +
+      "das bisherige Ergebnis – auch wenn der Betrag niedriger ist. " +
+      "Bei Abbruch bleibt dein bisheriges Ergebnis bestehen. " +
+      "Neuen Durchlauf starten?"
+    );
+
+    if (!confirmed) return;
   }
 
   setBusy(true);
@@ -391,18 +426,17 @@ async function advanceLessonTest(score, expectedRunId) {
   const finalScore = run.scoreSum / run.queue.length;
   const finalReward = Number(run.reward.toFixed(4));
 
-  const { error } = await updateTestRun(run.id, state.currentUser.id, {
-    status: "completed",
-    completed_at: new Date().toISOString(),
-    final_score: finalScore,
-    final_reward_eur: finalReward
-  });
+  const { error } = await completeTestRun(
+    run.id,
+    finalScore,
+    finalReward
+  );
 
   if (error) {
     console.error("Could not complete test:", error);
     await abandonLessonTest(
       "Der Test konnte nicht sicher gespeichert werden. " +
-      "Es wurde kein Betrag gutgeschrieben."
+      "Es wurde kein neuer Betrag gutgeschrieben."
     );
     return;
   }
@@ -423,7 +457,7 @@ async function advanceLessonTest(score, expectedRunId) {
 
   showMessage(
     `Lektionstest abgeschlossen. Endscore: ${finalScore.toFixed(2)}. ` +
-    `Vorläufiger Betrag: ${formatTestReward(finalReward)}. ` +
+    `Gültiger Betrag: ${formatTestReward(finalReward)}. ` +
     "Die Auszahlung wird später manuell geprüft."
   );
 }
@@ -479,7 +513,7 @@ $("login-form").addEventListener("submit", async event => {
 });
 
 $("lesson-select").addEventListener("change", async event => {
-  if (state.testRunState?.active) return;
+  if (state.testRunState?.active || state.wordCheckArmed) return;
   await loadItems(event.target.value);
 });
 
@@ -489,12 +523,15 @@ $("play-audio-button").addEventListener("click", playTts);
 $("record-button").addEventListener("click", () => {
   if (state.testRunState?.active) {
     startTestRecording();
+  } else if (state.wordCheckArmed) {
+    startWordCheckRecording();
   } else {
     startPracticeRecording();
   }
 });
 
-$("word-check-button").addEventListener("click", startWordCheck);
+$("word-check-button").addEventListener("click", armWordCheck);
+$("word-check-cancel-button").addEventListener("click", cancelWordCheck);
 $("stop-button").addEventListener("click", stopRecordingManually);
 $("test-start-button").addEventListener("click", startLessonTest);
 
@@ -504,7 +541,8 @@ $("test-abandon-button").addEventListener("click", async () => {
   }
 
   const confirmed = window.confirm(
-    "Test abbrechen? Die vorläufige Summe wird verworfen."
+    "Test abbrechen? Die vorläufige Summe dieses Durchgangs wird verworfen; " +
+    "ein früheres gültiges Ergebnis bleibt erhalten."
   );
 
   if (confirmed) {
@@ -520,6 +558,7 @@ $("repeat-button").addEventListener("click", async () => {
     !item ||
     state.isBusy ||
     state.mediaRecorder ||
+    state.wordCheckArmed ||
     state.testRunState?.active
   ) {
     return;
@@ -534,6 +573,7 @@ $("skip-button").addEventListener("click", async () => {
     !state.items.length ||
     state.isBusy ||
     state.mediaRecorder ||
+    state.wordCheckArmed ||
     state.testRunState?.active
   ) {
     return;
@@ -547,6 +587,45 @@ $("skip-button").addEventListener("click", async () => {
 
   state.currentIndex = (state.currentIndex + 1) % state.items.length;
   renderItem();
+});
+
+// TEMPORÄR: Reset-Button für die Testphase; später entfernen
+$("reset-tests-button")?.addEventListener("click", async () => {
+  if (state.isBusy || state.mediaRecorder) return;
+
+  const confirmed = window.confirm(
+    "Alle gespeicherten Endtests und Wort-Checks zurücksetzen? " +
+    "(Übungserfolge bleiben erhalten.)"
+  );
+
+  if (!confirmed) return;
+
+  setBusy(true);
+  showMessage("Gespeicherte Tests werden zurückgesetzt …");
+
+  const { error } = await resetAllTests();
+
+  if (error) {
+    console.error("Could not reset tests:", error);
+    setBusy(false);
+    showMessage(
+      "Zurücksetzen fehlgeschlagen (wurde das SQL für reset_my_tests " +
+      "ausgeführt?): " + error.message,
+      true
+    );
+    return;
+  }
+
+  state.testRunState = null;
+  state.wordCheckArmed = false;
+
+  const lessonId = $("lesson-select").value;
+  await loadLearnerProgress();
+  await loadTestEligibility(lessonId);
+
+  setBusy(false);
+  renderItem();
+  showMessage("Alle Endtests und Wort-Checks wurden zurückgesetzt.", false);
 });
 
 $("logout-button").addEventListener("click", async () => {
