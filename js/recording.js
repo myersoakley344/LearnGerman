@@ -28,6 +28,7 @@ import {
   state
 } from "./state.js";
 import {
+  renderItem,
   resetRecordingUi,
   setBusy,
   showEvaluation,
@@ -107,6 +108,7 @@ function configureRecorder(stream, mode, item) {
         state.recordingItem = null;
         state.recordingStartedAt = null;
         state.recordingStartedMonotonic = null;
+        state.wordCheckArmed = false;
 
         resetRecordingUi();
         setBusy(false);
@@ -138,7 +140,14 @@ export async function startPracticeRecording() {
   }
 
   const item = currentItem();
-  if (!item || state.isBusy || state.testRunState?.active) return;
+  if (
+    !item ||
+    state.isBusy ||
+    state.wordCheckArmed ||
+    state.testRunState?.active
+  ) {
+    return;
+  }
 
   try {
     setBusy(true);
@@ -193,7 +202,7 @@ function onPracticeRecorderStarted(item) {
   }, PRACTICE_RECORDING_LIMIT_MS);
 }
 
-export async function startWordCheck() {
+export function armWordCheck() {
   if (!state.currentApiKey) {
     showMessage("Bitte abmelden und erneut anmelden.", true);
     return;
@@ -208,6 +217,7 @@ export async function startWordCheck() {
     !item ||
     state.isBusy ||
     state.mediaRecorder ||
+    state.wordCheckArmed ||
     state.testRunState?.active
   ) {
     return;
@@ -223,6 +233,39 @@ export async function startWordCheck() {
 
   if (state.passedWordChecks.has(item.id)) {
     showMessage("Dieses Wort ist bereits erfolgreich getestet.", false);
+    return;
+  }
+
+  state.wordCheckArmed = true;
+  renderItem();
+  showMessage(
+    "Bereit für den Wort-Check. Tippe auf „Wort-Check-Aufnahme starten“, " +
+    "um das Wort anzuzeigen und aufzunehmen."
+  );
+}
+
+export function cancelWordCheck() {
+  if (!state.wordCheckArmed || state.isBusy || state.mediaRecorder) return;
+
+  state.wordCheckArmed = false;
+  renderItem();
+}
+
+export async function startWordCheckRecording() {
+  if (!state.currentApiKey) {
+    showMessage("Bitte abmelden und erneut anmelden.", true);
+    return;
+  }
+
+  const item = currentItem();
+
+  if (
+    !item ||
+    !state.wordCheckArmed ||
+    state.isBusy ||
+    state.mediaRecorder ||
+    state.testRunState?.active
+  ) {
     return;
   }
 
@@ -243,6 +286,7 @@ export async function startWordCheck() {
   } catch (error) {
     console.error(error);
     stopMediaTracks();
+    state.wordCheckArmed = false;
     resetRecordingUi();
     setBusy(false);
     showMessage(
@@ -264,11 +308,12 @@ function onWordCheckRecorderStarted(item) {
     (WORD_CHECK_LIMIT_MS / 1000).toFixed(1);
   $("timer-label").textContent = "Wort-Check läuft";
   $("timer-help").textContent =
-    "Sprich das deutsche Wort. " +
-    "Die Aufnahme endet spätestens nach 2 Sekunden.";
+    `Sprich das deutsche Wort. Die Aufnahme endet spätestens nach ` +
+    `${WORD_CHECK_LIMIT_MS / 1000} Sekunden.`;
 
   $("record-button").classList.add("hidden");
   $("word-check-button").classList.add("hidden");
+  $("word-check-cancel-button").classList.add("hidden");
   $("reveal-button").classList.add("hidden");
   $("play-audio-button").classList.add("hidden");
   $("translation").classList.add("hidden");
@@ -305,7 +350,8 @@ function onTestRecorderStarted(item) {
     `Testwort ${state.testRunState.index + 1} von ` +
     `${state.testRunState.queue.length}`;
   $("timer-help").textContent =
-    "Sprich das deutsche Wort. Die Aufnahme endet nach 2 Sekunden.";
+    `Sprich das deutsche Wort. Die Aufnahme endet nach ` +
+    `${TEST_RECORDING_LIMIT_MS / 1000} Sekunden.`;
 
   $("record-button").classList.add("hidden");
   $("stop-button").classList.remove("hidden");
@@ -458,6 +504,7 @@ async function finishRecording() {
   }
 
   if (!item || !state.mediaRecorder) {
+    state.wordCheckArmed = false;
     resetRecordingUi();
     setBusy(false);
     return;
@@ -482,6 +529,7 @@ async function finishRecording() {
   }
 
   if (!sourceBlob.size) {
+    state.wordCheckArmed = false;
     resetRecordingUi();
     setBusy(false);
     updateWordCheckButton();
@@ -559,6 +607,7 @@ async function evaluateRecording({
     trimmedAudio = await trimSilenceFromWav(originalWavBlob);
   } catch (error) {
     console.error("Audio conversion/trim failed:", error);
+    state.wordCheckArmed = false;
     resetRecordingUi();
     setBusy(false);
 
@@ -584,6 +633,7 @@ async function evaluateRecording({
     attemptNumber = await getNextAttemptNumber(item.id, mode);
   } catch (error) {
     console.error("Could not get attempt number:", error);
+    state.wordCheckArmed = false;
 
     if (mode === "test") {
       await callbacks.abandonLessonTest(
@@ -618,6 +668,7 @@ async function evaluateRecording({
       endReason
     });
 
+    state.wordCheckArmed = false;
     resetRecordingUi();
     setBusy(false);
     updateWordCheckButton();
@@ -772,6 +823,7 @@ async function evaluateRecording({
       mode
     });
 
+    state.wordCheckArmed = false;
     resetRecordingUi();
     setBusy(false);
 
@@ -793,6 +845,7 @@ async function evaluateRecording({
     return;
   }
 
+  state.wordCheckArmed = false;
   await callbacks.loadLearnerProgress();
 
   showEvaluation({
