@@ -66,6 +66,46 @@
         <div id="test-unlock-status" class="muted"></div>
       </section>
 
+      <section class="progress-box" aria-live="polite">
+  <strong id="word-check-progress">
+    0 von 0 Wörtern erfolgreich getestet
+  </strong>
+  <div id="test-unlock-status" class="muted"></div>
+</section>
+
+<section class="test-box" aria-live="polite">
+  <strong>Lektionstest</strong>
+  <div id="test-status" class="muted">
+    Teststatus wird geladen …
+  </div>
+  <div id="test-provisional-reward" class="test-reward hidden"></div>
+
+  <div class="stack test-actions">
+    <button
+      id="test-start-button"
+      class="test-button"
+      type="button"
+      disabled
+    >
+      Lektionstest starten
+    </button>
+
+    <button
+      id="test-abandon-button"
+      class="secondary hidden"
+      type="button"
+    >
+      Test abbrechen
+    </button>
+  </div>
+</section>
+
+<div class="word-status-row">
+  <span id="current-word-status" class="status-badge">
+    Noch nicht erfolgreich getestet
+  </span>
+</div>
+
       <div class="word-status-row">
         <span id="current-word-status" class="status-badge">
           Noch nicht erfolgreich getestet
