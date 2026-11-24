@@ -18,7 +18,6 @@ export const WORD_CHECK_LIMIT_MS = 2_000;
 export const TEST_RECORDING_LIMIT_MS = 4_000;
 export const RECORDING_CHUNK_MS = 100;
 export const RECORDING_CHUNK_GRACE_MS = 250;
-export const REQUIRED_SUCCESSES_PER_WORD = 3;
 export const MAX_TEST_STARTS = 5;
 
 export const AUDIO_SAMPLE_RATE = 16000;
@@ -59,7 +58,6 @@ export const state = {
   manualStop: false,
   isBusy: false,
 
-  practiceSuccessCounts: new Map(),
   passedWordChecks: new Set(),
   lastRecordingUrl: null,
 
@@ -141,7 +139,7 @@ export function parseLoginString(value) {
   };
 }
 
-export function getRequiredPreparedWords() {
+export function getRequiredWordsForTest() {
   if (state.items.length === 0) return 0;
 
   return Math.max(
@@ -150,10 +148,9 @@ export function getRequiredPreparedWords() {
   );
 }
 
-export function getPreparedWordCount() {
+export function getPassedWordCheckCount() {
   return state.items.filter(item =>
-    (state.practiceSuccessCounts.get(item.id) || 0) >=
-    REQUIRED_SUCCESSES_PER_WORD
+    state.passedWordChecks.has(item.id)
   ).length;
 }
 
