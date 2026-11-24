@@ -210,7 +210,9 @@ export async function fetchLearnerAttempts(userId, itemIds) {
 export async function fetchTestRuns(userId, lessonId) {
   return supabaseClient
     .from("learn_test_runs")
-    .select("id, status, voided_at")
+    .select(
+      "id, status, voided_at, final_score, final_reward_eur, completed_at"
+    )
     .eq("user_id", userId)
     .eq("lesson_id", lessonId)
     .order("started_at", { ascending: false })
@@ -235,6 +237,19 @@ export async function updateTestRun(runId, userId, values) {
     .update(values)
     .eq("id", runId)
     .eq("user_id", userId);
+}
+
+export async function completeTestRun(runId, finalScore, finalRewardEur) {
+  return supabaseClient.rpc("complete_learn_test_run", {
+    p_run_id: runId,
+    p_final_score: finalScore,
+    p_final_reward_eur: finalRewardEur
+  });
+}
+
+// TEMPORÄR: Reset für Testphase; später entfernen
+export async function resetAllTests() {
+  return supabaseClient.rpc("reset_my_tests");
 }
 
 export async function insertAttempt(row, { returnId = false } = {}) {
