@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6f8">
   <title>Fianarana teny alemà</title>
-  <link rel="stylesheet" href="./styles.css?v=5">
+  <link rel="stylesheet" href="./styles.css?v=6">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="./config.js" defer></script>
-  <script src="./app.js?v=5" defer></script>
+  <script src="./app.js?v=6" defer></script>
 </head>
 
 <body>
@@ -57,36 +57,36 @@
 
       <section class="progress-box" aria-live="polite">
         <strong id="word-check-progress">
-          0 von 0 Wörtern erfolgreich getestet
+          0 amin'ny 0 teny voasedra tsara
         </strong>
         <div id="test-unlock-status" class="muted"></div>
       </section>
 
       <section class="test-box" aria-live="polite">
-        <strong>Lektionstest</strong>
-        <div id="test-status" class="muted">Teststatus wird geladen …</div>
+        <strong>Fitsapana farany</strong>
+        <div id="test-status" class="muted">Maka ny satan'ny fitsapana …</div>
         <div id="test-provisional-reward" class="test-reward hidden"></div>
 
         <div class="stack test-actions">
           <button id="test-start-button" class="test-button" type="button" disabled>
-            Lektionstest starten
+            Hanomboka ny fitsapana
           </button>
           <button id="test-abandon-button" class="secondary hidden" type="button">
-            Test abbrechen
+            Ajanony ny fitsapana
           </button>
         </div>
       </section>
 
       <div class="word-status-row">
         <span id="current-word-status" class="status-badge">
-          Wort-Check noch offen
+          Tsy mbola voasedra
         </span>
       </div>
 
       <div id="prompt" class="prompt" aria-live="polite">...</div>
 
       <div id="timer-panel" class="timer-panel hidden" aria-live="assertive">
-        <div id="timer-label">Aufnahme läuft</div>
+        <div id="timer-label">Mandeha ny fandraisam-peo</div>
         <div id="timer-countdown">2.0</div>
         <div id="timer-help"></div>
       </div>
@@ -103,24 +103,19 @@
         <audio id="tts-player" class="hidden" controls></audio>
 
         <button id="record-button" class="primary" type="button">
-          Aufnahme mit Bewertung
+          Handray feo sy hanombana
         </button>
         <button id="word-check-button" class="primary" type="button">
-          Zeitbegrenzten Wort-Check starten
+          Fitsapana teny voafetra fotoana
         </button>
         <button id="word-check-cancel-button" class="secondary hidden" type="button">
-          Wort-Check abbrechen
+          Ajanony ny fitsapana teny
         </button>
         <button id="stop-button" class="danger hidden" type="button">
-          Fertig
+          Vita
         </button>
 
         <audio id="recording-player" class="hidden" controls></audio>
-      </div>
-
-      <div id="evaluation-panel" class="evaluation-panel hidden">
-        <h2>Valin'ny fanombanana</h2>
-        <div id="evaluation-result"></div>
       </div>
 
       <div class="nav-buttons">
@@ -134,12 +129,20 @@
 
       <div id="app-message" class="message" role="status"></div>
 
-      <!-- TEMPORÄR: Reset-Button für die Testphase; später entfernen -->
-      <div id="dev-reset-box" class="dev-reset-box">
-        <button id="reset-tests-button" class="danger" type="button">
-          Alle Tests zurücksetzen (Endtest &amp; Wort-Checks)
-        </button>
-      </div>
+      <form id="admin-code-form" class="admin-code-box">
+        <label for="admin-code-input" class="muted">Kaody mpitantana</label>
+        <div class="admin-code-row">
+          <input
+            id="admin-code-input"
+            type="password"
+            autocomplete="off"
+            placeholder="Kaody"
+          >
+          <button id="admin-code-submit" class="secondary small-button" type="submit">
+            Alefa
+          </button>
+        </div>
+      </form>
     </section>
   </section>
 </main>
@@ -153,11 +156,11 @@
 >
   <div class="modal-card">
     <div id="analysis-spinner" class="spinner" aria-hidden="true"></div>
-    <h2 id="analysis-modal-title">Analyse läuft …</h2>
+    <h2 id="analysis-modal-title">Mandeha ny fanombanana …</h2>
     <p id="analysis-modal-status" class="muted"></p>
     <div id="analysis-modal-result" class="modal-result"></div>
     <button id="analysis-modal-close" class="primary hidden" type="button">
-      OK / Weiter
+      Eny / Tohizo
     </button>
   </div>
 </div>
