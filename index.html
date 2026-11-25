@@ -5,12 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6f8">
   <title>Fianarana teny alemà</title>
-
-  <link rel="stylesheet" href="./styles.css?v=4">
-
+  <link rel="stylesheet" href="./styles.css?v=5">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="./config.js" defer></script>
-  <script src="./app.js?v=4" defer></script>
+  <script src="./app.js?v=5" defer></script>
 </head>
 
 <body>
@@ -30,7 +28,6 @@
           required
         >
       </div>
-
       <button class="primary" type="submit">Hiditra</button>
     </form>
 
@@ -48,11 +45,7 @@
         Vola azo: 0 Ariary
       </div>
 
-      <button
-        id="logout-button"
-        class="small-button secondary"
-        type="button"
-      >
+      <button id="logout-button" class="small-button secondary" type="button">
         Hivoaka
       </button>
     </header>
@@ -60,7 +53,6 @@
     <section class="card">
       <label for="lesson-select">Lesona</label>
       <select id="lesson-select"></select>
-
       <div id="lesson-title" class="muted lesson-title"></div>
 
       <section class="progress-box" aria-live="polite">
@@ -72,29 +64,14 @@
 
       <section class="test-box" aria-live="polite">
         <strong>Lektionstest</strong>
-        <div id="test-status" class="muted">
-          Teststatus wird geladen …
-        </div>
-        <div
-          id="test-provisional-reward"
-          class="test-reward hidden"
-        ></div>
+        <div id="test-status" class="muted">Teststatus wird geladen …</div>
+        <div id="test-provisional-reward" class="test-reward hidden"></div>
 
         <div class="stack test-actions">
-          <button
-            id="test-start-button"
-            class="test-button"
-            type="button"
-            disabled
-          >
+          <button id="test-start-button" class="test-button" type="button" disabled>
             Lektionstest starten
           </button>
-
-          <button
-            id="test-abandon-button"
-            class="secondary hidden"
-            type="button"
-          >
+          <button id="test-abandon-button" class="secondary hidden" type="button">
             Test abbrechen
           </button>
         </div>
@@ -108,70 +85,37 @@
 
       <div id="prompt" class="prompt" aria-live="polite">...</div>
 
-      <div
-        id="timer-panel"
-        class="timer-panel hidden"
-        aria-live="assertive"
-      >
+      <div id="timer-panel" class="timer-panel hidden" aria-live="assertive">
         <div id="timer-label">Aufnahme läuft</div>
         <div id="timer-countdown">2.0</div>
         <div id="timer-help"></div>
       </div>
 
       <div class="stack">
-        <button
-          id="reveal-button"
-          class="secondary"
-          type="button"
-        >
+        <button id="reveal-button" class="secondary" type="button">
           Asehoy ny dikanteny alemà
         </button>
-
         <div id="translation" class="translation hidden"></div>
 
-        <button
-          id="play-audio-button"
-          class="secondary"
-          type="button"
-        >
+        <button id="play-audio-button" class="secondary" type="button">
           Henoy ny teny alemà
         </button>
-
         <audio id="tts-player" class="hidden" controls></audio>
 
         <button id="record-button" class="primary" type="button">
           Aufnahme mit Bewertung
         </button>
-
-        <button
-          id="word-check-button"
-          class="primary"
-          type="button"
-        >
+        <button id="word-check-button" class="primary" type="button">
           Zeitbegrenzten Wort-Check starten
         </button>
-
-        <button
-          id="word-check-cancel-button"
-          class="secondary hidden"
-          type="button"
-        >
+        <button id="word-check-cancel-button" class="secondary hidden" type="button">
           Wort-Check abbrechen
         </button>
-
-        <button
-          id="stop-button"
-          class="danger hidden"
-          type="button"
-        >
+        <button id="stop-button" class="danger hidden" type="button">
           Fertig
         </button>
 
-        <audio
-          id="recording-player"
-          class="hidden"
-          controls
-        ></audio>
+        <audio id="recording-player" class="hidden" controls></audio>
       </div>
 
       <div id="evaluation-panel" class="evaluation-panel hidden">
@@ -180,19 +124,10 @@
       </div>
 
       <div class="nav-buttons">
-        <button
-          id="repeat-button"
-          class="secondary"
-          type="button"
-        >
+        <button id="repeat-button" class="secondary" type="button">
           Avereno ity teny ity
         </button>
-
-        <button
-          id="skip-button"
-          class="primary"
-          type="button"
-        >
+        <button id="skip-button" class="primary" type="button">
           Teny manaraka
         </button>
       </div>
@@ -201,16 +136,30 @@
 
       <!-- TEMPORÄR: Reset-Button für die Testphase; später entfernen -->
       <div id="dev-reset-box" class="dev-reset-box">
-        <button
-          id="reset-tests-button"
-          class="danger"
-          type="button"
-        >
+        <button id="reset-tests-button" class="danger" type="button">
           Alle Tests zurücksetzen (Endtest &amp; Wort-Checks)
         </button>
       </div>
     </section>
   </section>
 </main>
+
+<div
+  id="analysis-modal"
+  class="modal-backdrop hidden"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="analysis-modal-title"
+>
+  <div class="modal-card">
+    <div id="analysis-spinner" class="spinner" aria-hidden="true"></div>
+    <h2 id="analysis-modal-title">Analyse läuft …</h2>
+    <p id="analysis-modal-status" class="muted"></p>
+    <div id="analysis-modal-result" class="modal-result"></div>
+    <button id="analysis-modal-close" class="primary hidden" type="button">
+      OK / Weiter
+    </button>
+  </div>
+</div>
 </body>
 </html>
