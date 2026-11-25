@@ -1,15 +1,12 @@
 "use strict";
 
-const SUPABASE_URL =
-  "https://coaiznrxtpdqatvfbsyi.supabase.co";
-
-const SUPABASE_KEY =
-  "sb_publishable_D0adyb95if5W2IH5WA9JOQ_ENePqpoh";
+const SUPABASE_URL = "https://coaiznrxtpdqatvfbsyi.supabase.co";
+const SUPABASE_KEY = "sb_publishable_D0adyb95if5W2IH5WA9JOQ_ENePqpoh";
 
 const NANO_API_BASE = "https://api.nano-gpt.com/api/v1";
 const PRONUNCIATION_ENDPOINT = `${NANO_API_BASE}/chat/completions`;
-
 const PRONUNCIATION_MODEL = "google/gemini-4-carbon";
+const PRONUNCIATION_FALLBACK_MODEL = "google/gemini-4-hydrogen";
 
 const RECORDING_BUCKET = "learn-recordings";
 const TTS_BUCKET = "learn-tts";
@@ -20,6 +17,7 @@ const TEST_RECORDING_LIMIT_MS = 4_000;
 const RECORDING_CHUNK_MS = 100;
 const RECORDING_CHUNK_GRACE_MS = 250;
 const MAX_TEST_STARTS = 5;
+const LESSON_TARGET_ARIARY = 2500;
 
 const AUDIO_SAMPLE_RATE = 16000;
 const SILENCE_WINDOW_MS = 20;
@@ -27,10 +25,7 @@ const SILENCE_PADDING_MS = 120;
 const ABSOLUTE_SPEECH_THRESHOLD = 0.004;
 const RELATIVE_SPEECH_THRESHOLD = 0.08;
 
-const supabaseClient = window.supabase.createClient(
-  SUPABASE_URL,
-  SUPABASE_KEY
-);
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 let currentUser = null;
 let currentApiKey = null;
@@ -41,7 +36,6 @@ let currentIndex = 0;
 let promptShownAt = null;
 let usedTranslationForCurrentItem = false;
 let usedAudioForCurrentItem = false;
-
 let wordCheckArmed = false;
 
 let mediaRecorder = null;
@@ -60,38 +54,92 @@ let isBusy = false;
 
 let passedWordChecks = new Set();
 let lastRecordingUrl = null;
+let completedAriaryByLesson = new Map();
+let totalCompletedAriary = 0;
 
 let testRunState = null;
 let testEligibility = {
   starts: 0,
   completed: false,
   latestCompletedScore: null,
-  latestCompletedReward: null,
+  latestCompletedAriary: 0,
   loadFailed: false
 };
 
 const $ = id => document.getElementById(id);
 
 function showMessage(text, isError = false) {
-  const element = $("app-message");
-  element.textContent = text;
-  element.style.color = isError ? "#a12626" : "#236b37";
+  const el = $("app-message");
+  el.textContent = text;
+  el.style.color = isError ? "#a12626" : "#236b37";
+}
+
+function showAnalysisLoading(statusText) {
+  $("analysis-modal").classList.remove("hidden");
+  $("analysis-spinner").classList.remove("hidden");
+  $("analysis-modal-title").textContent = "Analyse läuft …";
+  $("analysis-modal-status").textContent = statusText;
+  $("analysis-modal-status").style.color = "#53616f";
+  $("analysis-modal-result").replaceChildren();
+  $("analysis-modal-close").classList.add("hidden");
+}
+
+function showAnalysisNotice(title, statusText, isError = false) {
+  $("analysis-modal").classList.remove("hidden");
+  $("analysis-spinner").classList.add("hidden");
+  $("analysis-modal-title").textContent = title;
+  $("analysis-modal-status").textContent = statusText;
+  $("analysis-modal-status").style.color = isError ? "#a12626" : "#236b37";
+  $("analysis-modal-result").replaceChildren();
+  $("analysis-modal-close").classList.remove("hidden");
+}
+
+function hideAnalysisModal() {
+  $("analysis-modal").classList.add("hidden");
 }
 
 function currentItem() {
   if (testRunState?.active) {
     return testRunState.queue[testRunState.index] || null;
   }
-
   return items[currentIndex] || null;
+}
+
+function getWordMaxAriary(wordCount) {
+  if (!wordCount || wordCount <= 0) return 0;
+  return Math.round(LESSON_TARGET_ARIARY / wordCount / 10) * 10;
+}
+
+function getWordEarnedAriary(wordCount, score) {
+  const n = Number(score);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.round(getWordMaxAriary(wordCount) * n);
+}
+
+function formatAriary(amount) {
+  const rounded = Math.round(Number(amount) || 0);
+  return `${new Intl.NumberFormat("de-DE").format(rounded)} Ariary`;
+}
+
+function getDisplayedAriary() {
+  if (testRunState?.active) {
+    const prev = completedAriaryByLesson.get(testRunState.lessonId) || 0;
+    return totalCompletedAriary - prev + testRunState.ariary;
+  }
+  return totalCompletedAriary;
+}
+
+function renderEarnedAriary() {
+  const badge = $("earned-ariary");
+  if (badge) {
+    badge.textContent = `Vola azo: ${formatAriary(getDisplayedAriary())}`;
+  }
 }
 
 function setBusy(value) {
   isBusy = value;
-
   $("lesson-select").disabled =
     value || Boolean(testRunState?.active) || wordCheckArmed;
-
   $("reveal-button").disabled = value;
   $("play-audio-button").disabled = value;
   $("record-button").disabled = value;
@@ -99,9 +147,8 @@ function setBusy(value) {
   $("repeat-button").disabled = value;
   $("skip-button").disabled = value;
 
-  // TEMPORÄR: Reset-Button für die Testphase
-  const resetButton = $("reset-tests-button");
-  if (resetButton) resetButton.disabled = value;
+  const resetBtn = $("reset-tests-button");
+  if (resetBtn) resetBtn.disabled = value;
 
   updateWordCheckButton();
   renderTestControls();
@@ -118,7 +165,6 @@ function normalizeWord(text) {
 
 function getNanoGPTConfig() {
   const config = window.LEARNGERMAN_CONFIG;
-
   if (
     !config ||
     typeof config.apiKeyPrefix !== "string" ||
@@ -128,7 +174,6 @@ function getNanoGPTConfig() {
   ) {
     throw new Error("Konfiguration fehlt. Prüfe config.js.");
   }
-
   return config;
 }
 
@@ -138,176 +183,120 @@ function parseLoginString(value) {
     .match(/^(\d{2})_([A-Za-z0-9]{4})_([A-Za-z0-9]{4})$/);
 
   if (!match) {
-    throw new Error(
-      "Bitte den Login im Format 01_7351_abcd eingeben."
-    );
+    throw new Error("Bitte den Login im Format 01_7351_abcd eingeben.");
   }
 
-  const participantNumber = match[1];
-  const profileCode = match[2];
-  const keyFragment = match[3];
+  const [, participantNumber, profileCode, keyFragment] = match;
   const config = getNanoGPTConfig();
 
   if (!config.profileCodes[participantNumber]) {
     throw new Error("Unbekanntes Teilnehmerprofil.");
   }
-
   if (config.profileCodes[participantNumber] !== profileCode) {
     throw new Error("Profilcode stimmt nicht.");
   }
 
   return {
     accessCode: `profil_${participantNumber}`,
-    apiKey:
-      config.apiKeyPrefix +
-      keyFragment +
-      config.apiKeySuffix
+    apiKey: config.apiKeyPrefix + keyFragment + config.apiKeySuffix
   };
 }
 
 function costFromObject(data) {
   if (!data || typeof data !== "object") return null;
-
   const pricing = data.x_nanogpt_pricing;
-
   if (pricing && typeof pricing === "object") {
     const amount = Number(pricing.amount ?? pricing.cost);
     if (Number.isFinite(amount)) return amount;
   }
-
   const usageCost = Number(data.usage?.cost);
   if (Number.isFinite(usageCost)) return usageCost;
-
   const directCost = Number(data.cost);
-  if (Number.isFinite(directCost)) return directCost;
-
-  return null;
+  return Number.isFinite(directCost) ? directCost : null;
 }
 
 function costFromHeaders(headers) {
-  for (const name of [
-    "x-nanogpt-pricing",
-    "x-nanogpt-cost",
-    "x-pricing"
-  ]) {
+  for (const name of ["x-nanogpt-pricing", "x-nanogpt-cost", "x-pricing"]) {
     const raw = headers.get(name);
     if (!raw) continue;
-
     try {
       const parsed = JSON.parse(raw);
       const amount = Number(parsed.amount ?? parsed.cost);
       if (Number.isFinite(amount)) return amount;
     } catch {
       const match = raw.match(/-?\d+(?:\.\d+)?/);
-
       if (match) {
         const amount = Number(match[0]);
         if (Number.isFinite(amount)) return amount;
       }
     }
   }
-
   return null;
 }
 
 async function lookupNanoCost(apiKey, requestId) {
   if (!requestId) return null;
-
   const url =
     "https://api.nano-gpt.com/api/v1/usage/requests/" +
     encodeURIComponent(requestId);
-
   try {
     const response = await fetch(url, {
-      headers: {
-        "x-api-key": apiKey,
-        "Accept": "application/json"
-      }
+      headers: { "x-api-key": apiKey, "Accept": "application/json" }
     });
-
     if (!response.ok) return null;
     return costFromObject(await response.json());
-  } catch (error) {
-    console.warn("Could not look up NanoGPT cost:", error);
+  } catch {
     return null;
   }
 }
 
 function readTokenCount(usage, fields) {
   if (!usage) return null;
-
   for (const field of fields) {
     const value = Number(usage[field]);
     if (Number.isFinite(value)) return value;
   }
-
   return null;
 }
 
 async function logEvent(eventType, item = null, payload = {}) {
   if (!currentUser) return;
-
-  const { error } = await supabaseClient
-    .from("learn_events")
-    .insert({
-      client_event_id: crypto.randomUUID(),
-      user_id: currentUser.id,
-      lesson_id: item?.lesson_id || payload.lessonId || null,
-      item_id: item?.id || null,
-      test_run_id: payload.testRunId || null,
-      event_type: eventType,
-      client_time: new Date().toISOString(),
-      payload
-    });
-
-  if (error) {
-    console.error("Could not log event:", error);
-  }
+  const { error } = await supabaseClient.from("learn_events").insert({
+    client_event_id: crypto.randomUUID(),
+    user_id: currentUser.id,
+    lesson_id: item?.lesson_id || payload.lessonId || null,
+    item_id: item?.id || null,
+    test_run_id: payload.testRunId || null,
+    event_type: eventType,
+    client_time: new Date().toISOString(),
+    payload
+  });
+  if (error) console.error("Could not log event:", error);
 }
 
 async function logApiUsage({
-  requestId,
-  attemptId,
-  itemId,
-  operation,
-  model,
-  status,
-  cost,
-  usage,
-  audioDurationMs
+  requestId, attemptId, itemId, operation, model, status, cost, usage, audioDurationMs
 }) {
   if (!currentUser) return;
-
-  const { error } = await supabaseClient
-    .from("learn_api_usage")
-    .insert({
-      client_request_id: crypto.randomUUID(),
-      user_id: currentUser.id,
-      attempt_id: attemptId,
-      item_id: itemId,
-      provider: "NanoGPT",
-      model_name: model,
-      operation,
-      status,
-      input_tokens: readTokenCount(
-        usage,
-        ["prompt_tokens", "input_tokens"]
-      ),
-      output_tokens: readTokenCount(
-        usage,
-        ["completion_tokens", "output_tokens"]
-      ),
-      estimated_cost: cost,
-      currency: "USD",
-      audio_duration_ms: audioDurationMs,
-      provider_request_id: requestId || null,
-      pricing_version: "NanoGPT API response or usage lookup",
-      completed_at: new Date().toISOString()
-    });
-
-  if (error) {
-    console.error("Could not log API usage:", error);
-  }
+  const { error } = await supabaseClient.from("learn_api_usage").insert({
+    client_request_id: crypto.randomUUID(),
+    user_id: currentUser.id,
+    attempt_id: attemptId,
+    item_id: itemId,
+    provider: "NanoGPT",
+    model_name: model,
+    operation,
+    status,
+    input_tokens: readTokenCount(usage, ["prompt_tokens", "input_tokens"]),
+    output_tokens: readTokenCount(usage, ["completion_tokens", "output_tokens"]),
+    estimated_cost: cost,
+    currency: "USD",
+    audio_duration_ms: audioDurationMs,
+    provider_request_id: requestId || null,
+    pricing_version: "NanoGPT API response or usage lookup",
+    completed_at: new Date().toISOString()
+  });
+  if (error) console.error("Could not log API usage:", error);
 }
 
 async function getProfile(user) {
@@ -316,14 +305,12 @@ async function getProfile(user) {
     .select("display_name, role")
     .eq("id", user.id)
     .single();
-
   if (error) throw error;
   return data;
 }
 
 async function enterApp(user) {
   const profile = await getProfile(user);
-
   if (profile.role !== "learner") {
     throw new Error("This account is not a learner account.");
   }
@@ -331,15 +318,96 @@ async function enterApp(user) {
   currentUser = user;
   $("login-screen").classList.add("hidden");
   $("app-screen").classList.remove("hidden");
-  $("participant-name").textContent =
-    profile.display_name || user.email || "";
+  $("participant-name").textContent = profile.display_name || user.email || "";
 
+  await loadTotalEarnedAriary();
   await loadLessons();
+}
+
+async function loadTotalEarnedAriary() {
+  completedAriaryByLesson = new Map();
+  totalCompletedAriary = 0;
+
+  if (!currentUser) {
+    renderEarnedAriary();
+    return;
+  }
+
+  const [runsRes, itemsRes] = await Promise.all([
+    supabaseClient
+      .from("learn_test_runs")
+      .select("id, lesson_id, final_score")
+      .eq("user_id", currentUser.id)
+      .eq("status", "completed")
+      .is("voided_at", null),
+    supabaseClient.from("learn_learner_items").select("id, lesson_id")
+  ]);
+
+  if (runsRes.error) {
+    console.error("Could not load earned Ariary:", runsRes.error);
+    renderEarnedAriary();
+    return;
+  }
+
+  const runs = runsRes.data || [];
+  if (!runs.length) {
+    renderEarnedAriary();
+    return;
+  }
+
+  const wordCounts = new Map();
+  if (!itemsRes.error) {
+    for (const row of itemsRes.data || []) {
+      wordCounts.set(row.lesson_id, (wordCounts.get(row.lesson_id) || 0) + 1);
+    }
+  }
+
+  const runIds = runs.map(run => run.id);
+  const { data: attemptsData, error: attemptsErr } = await supabaseClient
+    .from("learn_attempts")
+    .select("test_run_id, final_score")
+    .eq("user_id", currentUser.id)
+    .eq("mode", "test")
+    .in("test_run_id", runIds)
+    .limit(5000);
+
+  const attemptsByRun = new Map();
+  if (!attemptsErr && attemptsData) {
+    for (const a of attemptsData) {
+      if (!a.test_run_id) continue;
+      const list = attemptsByRun.get(a.test_run_id) || [];
+      list.push(a);
+      attemptsByRun.set(a.test_run_id, list);
+    }
+  }
+
+  for (const run of runs) {
+    const runAttempts = attemptsByRun.get(run.id) || [];
+    const count = wordCounts.get(run.lesson_id) || runAttempts.length || items.length;
+    let runAriary = 0;
+
+    if (runAttempts.length > 0 && count > 0) {
+      for (const a of runAttempts) {
+        runAriary += getWordEarnedAriary(count, a.final_score);
+      }
+    } else if (count > 0) {
+      runAriary = Math.round(
+        (Number(run.final_score) || 0) * count * getWordMaxAriary(count)
+      );
+    }
+
+    completedAriaryByLesson.set(
+      run.lesson_id,
+      (completedAriaryByLesson.get(run.lesson_id) || 0) + runAriary
+    );
+    totalCompletedAriary += runAriary;
+  }
+
+  renderEarnedAriary();
 }
 
 async function loadLessons() {
   showMessage("Loading lessons...");
-
   const { data, error } = await supabaseClient
     .from("learn_lessons")
     .select("id, slug, title, order_index")
@@ -353,7 +421,6 @@ async function loadLessons() {
   }
 
   lessons = data || [];
-
   const select = $("lesson-select");
   select.replaceChildren();
 
@@ -377,20 +444,15 @@ async function loadLessons() {
 async function loadItems(lessonId) {
   if (testRunState?.active || wordCheckArmed) {
     showMessage(
-      "Während eines Tests oder Wort-Checks kann die Lektion nicht " +
-      "gewechselt werden."
+      "Während eines Tests oder Wort-Checks kann die Lektion nicht gewechselt werden."
     );
     return;
   }
 
   showMessage("Loading lesson...");
-
   const { data, error } = await supabaseClient
     .from("learn_learner_items")
-    .select(
-      "id, lesson_id, order_index, prompt_mg, target_de, " +
-      "tts_audio_path, max_reward_eur"
-    )
+    .select("id, lesson_id, order_index, prompt_mg, target_de, tts_audio_path, max_reward_eur")
     .eq("lesson_id", lessonId)
     .order("order_index");
 
@@ -407,16 +469,12 @@ async function loadItems(lessonId) {
   testRunState = null;
   wordCheckArmed = false;
 
-  const lesson = lessons.find(value => value.id === lessonId);
+  const lesson = lessons.find(v => v.id === lessonId);
   $("lesson-title").textContent = lesson?.title || "";
 
   await loadLearnerProgress();
   await loadTestEligibility(lessonId);
-
-  await logEvent("lesson_opened", null, {
-    lessonId,
-    itemCount: items.length
-  });
+  await logEvent("lesson_opened", null, { lessonId, itemCount: items.length });
 
   showMessage("");
   renderItem();
@@ -430,31 +488,23 @@ async function loadLearnerProgress() {
     return;
   }
 
-  const itemIds = items.map(item => item.id);
-
   const { data, error } = await supabaseClient
     .from("learn_attempts")
     .select("item_id, final_score, evaluation_status")
     .eq("user_id", currentUser.id)
-    .in("item_id", itemIds)
+    .in("item_id", items.map(item => item.id))
     .eq("mode", "word_check")
     .limit(5000);
 
   if (error) {
     console.error("Could not load learner progress:", error);
-    showMessage(
-      "Fortschritt konnte nicht geladen werden: " + error.message,
-      true
-    );
+    showMessage("Fortschritt konnte nicht geladen werden: " + error.message, true);
     renderProgress();
     return;
   }
 
   for (const attempt of data || []) {
-    if (
-      attempt.evaluation_status === "complete" &&
-      Number(attempt.final_score) === 1
-    ) {
+    if (attempt.evaluation_status === "complete" && Number(attempt.final_score) === 1) {
       passedWordChecks.add(attempt.item_id);
     }
   }
@@ -464,17 +514,11 @@ async function loadLearnerProgress() {
 
 function getRequiredWordsForTest() {
   if (items.length === 0) return 0;
-
-  return Math.max(
-    1,
-    items.length - Math.ceil(items.length * 0.1)
-  );
+  return Math.max(1, items.length - Math.ceil(items.length * 0.1));
 }
 
 function getPassedWordCheckCount() {
-  return items.filter(item =>
-    passedWordChecks.has(item.id)
-  ).length;
+  return items.filter(item => passedWordChecks.has(item.id)).length;
 }
 
 async function loadTestEligibility(lessonId) {
@@ -482,7 +526,7 @@ async function loadTestEligibility(lessonId) {
     starts: 0,
     completed: false,
     latestCompletedScore: null,
-    latestCompletedReward: null,
+    latestCompletedAriary: completedAriaryByLesson.get(lessonId) || 0,
     loadFailed: false
   };
 
@@ -493,9 +537,7 @@ async function loadTestEligibility(lessonId) {
 
   const { data, error } = await supabaseClient
     .from("learn_test_runs")
-    .select(
-      "id, status, voided_at, final_score, final_reward_eur, completed_at"
-    )
+    .select("id, status, voided_at, final_score, completed_at")
     .eq("user_id", currentUser.id)
     .eq("lesson_id", lessonId)
     .order("started_at", { ascending: false })
@@ -509,102 +551,66 @@ async function loadTestEligibility(lessonId) {
   }
 
   const runs = data || [];
-
-  // Nach einem Reload wird ein offener Test als abgebrochen gezählt.
   for (const run of runs) {
     if (run.status !== "in_progress") continue;
-
-    const { error: updateError } = await supabaseClient
+    const { error: updateErr } = await supabaseClient
       .from("learn_test_runs")
-      .update({
-        status: "abandoned",
-        completed_at: new Date().toISOString()
-      })
+      .update({ status: "abandoned", completed_at: new Date().toISOString() })
       .eq("id", run.id)
       .eq("user_id", currentUser.id);
-
-    if (updateError) {
-      console.error("Could not abandon interrupted test:", updateError);
-    } else {
-      run.status = "abandoned";
-    }
+    if (!updateErr) run.status = "abandoned";
   }
 
-  const validCompletedRun =
-    runs.find(run => run.status === "completed" && !run.voided_at) || null;
-
+  const validRun = runs.find(r => r.status === "completed" && !r.voided_at) || null;
   testEligibility.starts = runs.length;
-  testEligibility.completed = Boolean(validCompletedRun);
-  testEligibility.latestCompletedScore = validCompletedRun
-    ? validCompletedRun.final_score
-    : null;
-  testEligibility.latestCompletedReward = validCompletedRun
-    ? validCompletedRun.final_reward_eur
-    : null;
+  testEligibility.completed = Boolean(validRun);
+  testEligibility.latestCompletedScore = validRun ? validRun.final_score : null;
+  testEligibility.latestCompletedAriary = validRun
+    ? completedAriaryByLesson.get(lessonId) ||
+      Math.round((Number(validRun.final_score) || 0) * items.length * getWordMaxAriary(items.length))
+    : 0;
 
   renderTestControls();
 }
 
-function formatTestReward(value) {
-  return new Intl.NumberFormat("de-DE", {
-    style: "currency",
-    currency: "EUR",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 4
-  }).format(Number(value) || 0);
-}
-
 function renderTestControls() {
-  const startButton = $("test-start-button");
+  const startBtn = $("test-start-button");
   const status = $("test-status");
-  const abandonButton = $("test-abandon-button");
+  const abandonBtn = $("test-abandon-button");
   const reward = $("test-provisional-reward");
 
-  if (!startButton || !status || !abandonButton || !reward) return;
+  if (!startBtn || !status || !abandonBtn || !reward) return;
 
   const active = Boolean(testRunState?.active);
-  abandonButton.classList.toggle("hidden", !active);
+  abandonBtn.classList.toggle("hidden", !active);
 
   if (active) {
-    const total = testRunState.queue.length;
-    const completed = testRunState.index;
-
     status.textContent =
-      `Test läuft: ${completed} von ${total} Wörtern beantwortet.`;
-
-    reward.textContent =
-      `Vorläufiger Betrag: ${formatTestReward(testRunState.reward)}`;
+      `Test läuft: ${testRunState.index} von ${testRunState.queue.length} Wörtern beantwortet.`;
+    reward.textContent = `Vorläufig verdient: ${formatAriary(testRunState.ariary)}`;
     reward.classList.remove("hidden");
-    startButton.textContent = "Lektionstest starten";
-    startButton.disabled = true;
+    startBtn.textContent = "Lektionstest starten";
+    startBtn.disabled = true;
     return;
   }
 
   reward.classList.add("hidden");
 
   if (testEligibility.loadFailed) {
-    startButton.textContent = "Lektionstest starten";
-    status.textContent =
-      "Teststatus konnte nicht geladen werden. Bitte Seite neu laden.";
-    startButton.disabled = true;
+    startBtn.textContent = "Lektionstest starten";
+    status.textContent = "Teststatus konnte nicht geladen werden. Bitte Seite neu laden.";
+    startBtn.disabled = true;
     return;
   }
 
   if (testEligibility.starts >= MAX_TEST_STARTS) {
-    startButton.textContent = "Lektionstest starten";
-
-    if (testEligibility.completed) {
-      status.textContent =
-        `Startlimit (${MAX_TEST_STARTS}/${MAX_TEST_STARTS}) erreicht. ` +
-        `Gültiges Ergebnis: Score ` +
-        `${Number(testEligibility.latestCompletedScore).toFixed(2)} ` +
-        `(${formatTestReward(testEligibility.latestCompletedReward)}).`;
-    } else {
-      status.textContent =
-        `Das Startlimit von ${MAX_TEST_STARTS} Tests wurde erreicht.`;
-    }
-
-    startButton.disabled = true;
+    startBtn.textContent = "Lektionstest starten";
+    status.textContent = testEligibility.completed
+      ? `Startlimit (${MAX_TEST_STARTS}/${MAX_TEST_STARTS}) erreicht. Gültiges Ergebnis: ` +
+        `Score ${Number(testEligibility.latestCompletedScore).toFixed(2)} ` +
+        `(${formatAriary(testEligibility.latestCompletedAriary)}).`
+      : `Das Startlimit von ${MAX_TEST_STARTS} Tests wurde erreicht.`;
+    startBtn.disabled = true;
     return;
   }
 
@@ -612,52 +618,44 @@ function renderTestControls() {
   const passed = getPassedWordCheckCount();
 
   if (passed < required) {
-    startButton.textContent = "Lektionstest starten";
+    startBtn.textContent = "Lektionstest starten";
     status.textContent =
-      `Freischaltung: ${passed} von ${required} Wörtern im Wort-Check ` +
-      "bestanden.";
-    startButton.disabled = true;
+      `Freischaltung: ${passed} von ${required} Wörtern im Wort-Check bestanden.`;
+    startBtn.disabled = true;
     return;
   }
 
   const remaining = MAX_TEST_STARTS - testEligibility.starts;
-
   if (testEligibility.completed) {
-    startButton.textContent = "Lektionstest wiederholen";
+    startBtn.textContent = "Lektionstest wiederholen";
     status.textContent =
-      `Aktuelles gültiges Ergebnis: Score ` +
-      `${Number(testEligibility.latestCompletedScore).toFixed(2)} ` +
-      `(${formatTestReward(testEligibility.latestCompletedReward)}). ` +
+      `Aktuelles gültiges Ergebnis: Score ${Number(testEligibility.latestCompletedScore).toFixed(2)} ` +
+      `(${formatAriary(testEligibility.latestCompletedAriary)}). ` +
       `Verbleibende Starts: ${remaining} von ${MAX_TEST_STARTS}. ` +
       "Ein neu abgeschlossener Test ersetzt das bisherige Ergebnis.";
   } else {
-    startButton.textContent = "Lektionstest starten";
+    startBtn.textContent = "Lektionstest starten";
     status.textContent =
-      `Freigeschaltet. Verfügbare Starts: ` +
-      `${remaining} von ${MAX_TEST_STARTS}.`;
+      `Freigeschaltet. Verfügbare Starts: ${remaining} von ${MAX_TEST_STARTS}.`;
   }
 
-  startButton.disabled = isBusy || wordCheckArmed;
+  startBtn.disabled = isBusy || wordCheckArmed;
 }
 
 function renderProgress() {
   const passedCount = getPassedWordCheckCount();
-
   $("word-check-progress").textContent =
     `${passedCount} von ${items.length} Wörtern erfolgreich getestet`;
 
   const required = getRequiredWordsForTest();
-
   if (!items.length) {
     $("test-unlock-status").textContent = "";
   } else if (passedCount >= required) {
-    $("test-unlock-status").textContent =
-      "Voraussetzung für den Lektionstest erfüllt.";
+    $("test-unlock-status").textContent = "Voraussetzung für den Lektionstest erfüllt.";
   } else {
     $("test-unlock-status").textContent =
-      `Für den Lektionstest: ${passedCount} von ${required} Wörtern ` +
-      "im Wort-Check bestanden. Den Wort-Check kannst du jederzeit " +
-      "starten und beliebig oft wiederholen.";
+      `Für den Lektionstest: ${passedCount} von ${required} Wörtern im Wort-Check bestanden. ` +
+      "Den Wort-Check kannst du jederzeit starten und beliebig oft wiederholen.";
   }
 
   renderCurrentWordStatus();
@@ -668,13 +666,11 @@ function renderProgress() {
 function renderCurrentWordStatus() {
   const item = currentItem();
   const badge = $("current-word-status");
-
   if (!item) {
     badge.textContent = "";
     badge.classList.remove("passed");
     return;
   }
-
   if (passedWordChecks.has(item.id)) {
     badge.textContent = "Wort-Check bestanden";
     badge.classList.add("passed");
@@ -685,38 +681,25 @@ function renderCurrentWordStatus() {
 }
 
 function updateWordCheckButton() {
-  const button = $("word-check-button");
-  if (!button) return;
-
+  const btn = $("word-check-button");
+  if (!btn) return;
   const item = currentItem();
-
-  if (!item) {
-    button.disabled = true;
-    return;
-  }
-
-  button.disabled =
-    isBusy ||
-    wordCheckArmed ||
-    Boolean(testRunState?.active);
+  btn.disabled = !item || isBusy || wordCheckArmed || Boolean(testRunState?.active);
 }
 
 function getTtsUrl(path) {
   if (!path) return null;
-
-  return supabaseClient
-    .storage
-    .from(TTS_BUCKET)
-    .getPublicUrl(path)
-    .data
-    .publicUrl;
+  return supabaseClient.storage.from(TTS_BUCKET).getPublicUrl(path).data.publicUrl;
 }
 
-function renderItem() {
+function renderItem({ keepEvaluation = false } = {}) {
   const item = currentItem();
 
-  $("evaluation-panel").classList.add("hidden");
-  $("evaluation-result").replaceChildren();
+  if (!keepEvaluation) {
+    $("evaluation-panel").classList.add("hidden");
+    $("evaluation-result").replaceChildren();
+  }
+
   $("translation").classList.add("hidden");
   $("translation").textContent = "";
   $("recording-player").classList.add("hidden");
@@ -757,7 +740,6 @@ function renderItem() {
     $("app-screen").classList.remove("word-check-armed");
     $("item-position").textContent =
       `Testwort ${testRunState.index + 1} / ${testRunState.queue.length}`;
-
     $("reveal-button").classList.add("hidden");
     $("translation").classList.add("hidden");
     $("play-audio-button").classList.add("hidden");
@@ -766,7 +748,6 @@ function renderItem() {
     $("word-check-cancel-button").classList.add("hidden");
     $("repeat-button").classList.add("hidden");
     $("skip-button").classList.add("hidden");
-
     $("record-button").textContent = "Testantwort aufnehmen";
     $("record-button").classList.remove("hidden");
     $("record-button").disabled = isBusy;
@@ -775,7 +756,6 @@ function renderItem() {
     $("app-screen").classList.add("word-check-armed");
     $("item-position").textContent =
       `Teny ${currentIndex + 1} / ${items.length} · Wort-Check`;
-
     $("reveal-button").classList.add("hidden");
     $("translation").classList.add("hidden");
     $("play-audio-button").classList.add("hidden");
@@ -783,7 +763,6 @@ function renderItem() {
     $("word-check-button").classList.add("hidden");
     $("repeat-button").classList.add("hidden");
     $("skip-button").classList.add("hidden");
-
     $("record-button").textContent = "Wort-Check-Aufnahme starten";
     $("record-button").classList.remove("hidden");
     $("record-button").disabled = isBusy;
@@ -792,23 +771,18 @@ function renderItem() {
     $("lesson-select").disabled = true;
   } else {
     $("app-screen").classList.remove("word-check-armed");
-    $("item-position").textContent =
-      `Teny ${currentIndex + 1} / ${items.length}`;
-
+    $("item-position").textContent = `Teny ${currentIndex + 1} / ${items.length}`;
     $("reveal-button").classList.remove("hidden");
     $("play-audio-button").classList.remove("hidden");
     $("word-check-button").classList.remove("hidden");
     $("word-check-cancel-button").classList.add("hidden");
     $("repeat-button").classList.remove("hidden");
     $("skip-button").classList.remove("hidden");
-
     $("record-button").textContent = "Aufnahme mit Bewertung";
     $("record-button").classList.remove("hidden");
     $("lesson-select").disabled = isBusy;
-
     $("reveal-button").disabled = isBusy;
-    $("play-audio-button").disabled =
-      isBusy || !item.tts_audio_path;
+    $("play-audio-button").disabled = isBusy || !item.tts_audio_path;
     $("record-button").disabled = isBusy;
     $("repeat-button").disabled = isBusy;
     $("skip-button").disabled = isBusy;
@@ -818,43 +792,26 @@ function renderItem() {
 
   if (!wordCheckArmed) {
     logEvent("item_shown", item, { index: currentIndex });
-    showMessage("");
+    if (!keepEvaluation) showMessage("");
   }
 }
 
 function revealTranslation() {
   const item = currentItem();
-  if (
-    !item ||
-    testRunState?.active ||
-    wordCheckArmed ||
-    recordingMode === "word_check"
-  ) {
-    return;
-  }
-
+  if (!item || testRunState?.active || wordCheckArmed || recordingMode === "word_check") return;
   $("translation").textContent = item.target_de;
   $("translation").classList.remove("hidden");
   usedTranslationForCurrentItem = true;
-
   logEvent("translation_revealed", item);
 }
 
 async function playTts() {
   const item = currentItem();
-
   if (!item?.tts_audio_path) {
     showMessage("No TTS audio is available for this item.", true);
     return;
   }
-
-  if (
-    testRunState?.active ||
-    wordCheckArmed ||
-    recordingMode === "word_check"
-  ) {
-    return;
-  }
+  if (testRunState?.active || wordCheckArmed || recordingMode === "word_check") return;
 
   const player = $("tts-player");
   player.src = getTtsUrl(item.tts_audio_path);
@@ -862,7 +819,6 @@ async function playTts() {
   usedAudioForCurrentItem = true;
 
   await logEvent("tts_played", item);
-
   try {
     await player.play();
   } catch (error) {
@@ -873,14 +829,7 @@ async function playTts() {
 
 function chooseRecorderMimeType() {
   if (!window.MediaRecorder) return "";
-
-  const candidates = [
-    "audio/webm;codecs=opus",
-    "audio/webm",
-    "audio/mp4"
-  ];
-
-  return candidates.find(type =>
+  return ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find(type =>
     MediaRecorder.isTypeSupported(type)
   ) || "";
 }
@@ -895,26 +844,17 @@ function getRecordingLimitMs(mode) {
 async function requestAudioStream() {
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
     throw new Error(
-      "Dieser Browser unterstützt keine Audioaufnahme. " +
-      "Bitte Chrome auf Android verwenden."
+      "Dieser Browser unterstützt keine Audioaufnahme. Bitte Chrome auf Android verwenden."
     );
   }
-
   return navigator.mediaDevices.getUserMedia({
-    audio: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true
-    }
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
   });
 }
 
 function configureRecorder(stream, mode, item) {
   const mimeType = chooseRecorderMimeType();
-  const recorder = new MediaRecorder(
-    stream,
-    mimeType ? { mimeType } : undefined
-  );
+  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
 
   mediaRecorder = recorder;
   recordingStream = stream;
@@ -925,75 +865,59 @@ function configureRecorder(stream, mode, item) {
   recordingStartedMonotonic = null;
   manualStop = false;
 
-  recorder.addEventListener(
-    "start",
-    () => {
-      recordingStartedAt = Date.now();
-      recordingStartedMonotonic = performance.now();
-    },
-    { once: true }
-  );
+  recorder.addEventListener("start", () => {
+    recordingStartedAt = Date.now();
+    recordingStartedMonotonic = performance.now();
+  }, { once: true });
 
   recorder.addEventListener("dataavailable", event => {
     if (!event.data?.size) return;
-
     const limitMs = getRecordingLimitMs(recordingMode);
     const elapsedMs = recordingStartedMonotonic === null
       ? 0
       : performance.now() - recordingStartedMonotonic;
 
-    if (
-      limitMs === null ||
-      elapsedMs <= limitMs + RECORDING_CHUNK_GRACE_MS
-    ) {
+    if (limitMs === null || elapsedMs <= limitMs + RECORDING_CHUNK_GRACE_MS) {
       recordingChunks.push(event.data);
       return;
     }
-
     if (recorder.state === "recording") {
       manualStop = false;
       recorder.stop();
     }
   });
 
-  recorder.addEventListener(
-    "stop",
-    () => {
-      void finishRecording().catch(async error => {
-        console.error("Recording finalization failed:", error);
+  recorder.addEventListener("stop", () => {
+    void finishRecording().catch(async error => {
+      console.error("Recording finalization failed:", error);
+      clearRecordingTimers();
+      stopMediaTracks();
+      recordingChunks = [];
+      mediaRecorder = null;
+      recordingMode = null;
+      recordingItem = null;
+      recordingStartedAt = null;
+      recordingStartedMonotonic = null;
+      wordCheckArmed = false;
 
-        clearRecordingTimers();
-        stopMediaTracks();
+      resetRecordingUi();
+      setBusy(false);
+      updateWordCheckButton();
 
-        recordingChunks = [];
-        mediaRecorder = null;
-        recordingMode = null;
-        recordingItem = null;
-        recordingStartedAt = null;
-        recordingStartedMonotonic = null;
-        wordCheckArmed = false;
+      if (testRunState?.active) {
+        const msg = "Technisches Problem beim Verarbeiten der Testaufnahme. " +
+          "Der Test wurde ohne Auszahlung abgebrochen.";
+        await abandonLessonTest(msg);
+        showAnalysisNotice("Test abgebrochen", msg, true);
+        return;
+      }
 
-        resetRecordingUi();
-        setBusy(false);
-        updateWordCheckButton();
-
-        if (testRunState?.active) {
-          await abandonLessonTest(
-            "Technisches Problem beim Verarbeiten der Testaufnahme. " +
-            "Der Test wurde ohne Auszahlung abgebrochen."
-          );
-          return;
-        }
-
-        showMessage(
-          "Die Aufnahme konnte nicht verarbeitet werden. " +
-          (error.message || String(error)),
-          true
-        );
-      });
-    },
-    { once: true }
-  );
+      const msg = "Die Aufnahme konnte nicht verarbeitet werden. " +
+        (error.message || String(error));
+      showMessage(msg, true);
+      showAnalysisNotice("Aufnahme fehlgeschlagen", msg, true);
+    });
+  }, { once: true });
 }
 
 async function startPracticeRecording() {
@@ -1001,36 +925,22 @@ async function startPracticeRecording() {
     showMessage("Bitte abmelden und erneut anmelden.", true);
     return;
   }
-
   const item = currentItem();
   if (!item || isBusy || wordCheckArmed || testRunState?.active) return;
 
   try {
     setBusy(true);
-    showMessage(
-      "Mikrofon wird vorbereitet … " +
-      "Die Aufnahme endet spätestens nach 20 Sekunden."
-    );
-
+    showMessage("Mikrofon wird vorbereitet … Die Aufnahme endet spätestens nach 20 Sekunden.");
     const stream = await requestAudioStream();
     configureRecorder(stream, "practice", item);
-
-    mediaRecorder.addEventListener(
-      "start",
-      () => onPracticeRecorderStarted(item),
-      { once: true }
-    );
-
+    mediaRecorder.addEventListener("start", () => onPracticeRecorderStarted(item), { once: true });
     mediaRecorder.start(RECORDING_CHUNK_MS);
   } catch (error) {
     console.error(error);
     stopMediaTracks();
     resetRecordingUi();
     setBusy(false);
-    showMessage(
-      error.message || "Aufnahme konnte nicht gestartet werden.",
-      true
-    );
+    showMessage(error.message || "Aufnahme konnte nicht gestartet werden.", true);
   }
 }
 
@@ -1039,17 +949,9 @@ function onPracticeRecorderStarted(item) {
   $("word-check-button").classList.add("hidden");
   $("stop-button").classList.remove("hidden");
   $("stop-button").disabled = false;
+  showMessage("Aufnahme läuft. Tippe auf „Fertig“; automatisch endet sie nach 20 Sekunden.");
 
-  showMessage(
-    "Aufnahme läuft. Tippe auf „Fertig“; " +
-    "automatisch endet sie nach 20 Sekunden."
-  );
-
-  logEvent("recording_started", item, {
-    mode: "practice",
-    timeLimitMs: PRACTICE_RECORDING_LIMIT_MS
-  });
-
+  logEvent("recording_started", item, { mode: "practice", timeLimitMs: PRACTICE_RECORDING_LIMIT_MS });
   recordingDeadlineTimer = window.setTimeout(() => {
     if (mediaRecorder?.state === "recording") {
       manualStop = false;
@@ -1063,18 +965,8 @@ function armWordCheck() {
     showMessage("Bitte abmelden und erneut anmelden.", true);
     return;
   }
-
   const item = currentItem();
-
-  if (
-    !item ||
-    isBusy ||
-    mediaRecorder ||
-    wordCheckArmed ||
-    testRunState?.active
-  ) {
-    return;
-  }
+  if (!item || isBusy || mediaRecorder || wordCheckArmed || testRunState?.active) return;
 
   wordCheckArmed = true;
   renderItem();
@@ -1086,7 +978,6 @@ function armWordCheck() {
 
 function cancelWordCheck() {
   if (!wordCheckArmed || isBusy || mediaRecorder) return;
-
   wordCheckArmed = false;
   renderItem();
 }
@@ -1096,32 +987,15 @@ async function startWordCheckRecording() {
     showMessage("Bitte abmelden und erneut anmelden.", true);
     return;
   }
-
   const item = currentItem();
-
-  if (
-    !item ||
-    !wordCheckArmed ||
-    isBusy ||
-    mediaRecorder ||
-    testRunState?.active
-  ) {
-    return;
-  }
+  if (!item || !wordCheckArmed || isBusy || mediaRecorder || testRunState?.active) return;
 
   setBusy(true);
   showMessage("Mikrofon wird vorbereitet …");
-
   try {
     const stream = await requestAudioStream();
     configureRecorder(stream, "word_check", item);
-
-    mediaRecorder.addEventListener(
-      "start",
-      () => onWordCheckRecorderStarted(item),
-      { once: true }
-    );
-
+    mediaRecorder.addEventListener("start", () => onWordCheckRecorderStarted(item), { once: true });
     mediaRecorder.start(RECORDING_CHUNK_MS);
   } catch (error) {
     console.error(error);
@@ -1129,10 +1003,7 @@ async function startWordCheckRecording() {
     wordCheckArmed = false;
     resetRecordingUi();
     setBusy(false);
-    showMessage(
-      error.message || "Aufnahme konnte nicht gestartet werden.",
-      true
-    );
+    showMessage(error.message || "Aufnahme konnte nicht gestartet werden.", true);
   }
 }
 
@@ -1143,12 +1014,10 @@ function onWordCheckRecorderStarted(item) {
 
   $("prompt").textContent = item.prompt_mg;
   $("timer-panel").classList.remove("hidden");
-  $("timer-countdown").textContent =
-    (WORD_CHECK_LIMIT_MS / 1000).toFixed(1);
+  $("timer-countdown").textContent = (WORD_CHECK_LIMIT_MS / 1000).toFixed(1);
   $("timer-label").textContent = "Wort-Check läuft";
   $("timer-help").textContent =
-    `Sprich das deutsche Wort. Die Aufnahme endet spätestens nach ` +
-    `${WORD_CHECK_LIMIT_MS / 1000} Sekunden.`;
+    `Sprich das deutsche Wort. Die Aufnahme endet spätestens nach ${WORD_CHECK_LIMIT_MS / 1000} Sekunden.`;
 
   $("record-button").classList.add("hidden");
   $("word-check-button").classList.add("hidden");
@@ -1159,13 +1028,9 @@ function onWordCheckRecorderStarted(item) {
   $("tts-player").classList.add("hidden");
   $("stop-button").classList.remove("hidden");
   $("stop-button").disabled = false;
-
   showMessage("Aufnahme läuft …");
 
-  logEvent("word_check_started", item, {
-    timeLimitMs: WORD_CHECK_LIMIT_MS
-  });
-
+  logEvent("word_check_started", item, { timeLimitMs: WORD_CHECK_LIMIT_MS });
   startCountdownTimer();
 
   recordingDeadlineTimer = window.setTimeout(() => {
@@ -1182,18 +1047,15 @@ function onTestRecorderStarted(item) {
   wordCheckDeadline = wordCheckStartedAt + TEST_RECORDING_LIMIT_MS;
 
   $("timer-panel").classList.remove("hidden");
-  $("timer-countdown").textContent =
-    (TEST_RECORDING_LIMIT_MS / 1000).toFixed(1);
+  $("timer-countdown").textContent = (TEST_RECORDING_LIMIT_MS / 1000).toFixed(1);
   $("timer-label").textContent =
     `Testwort ${testRunState.index + 1} von ${testRunState.queue.length}`;
   $("timer-help").textContent =
-    `Sprich das deutsche Wort. Die Aufnahme endet nach ` +
-    `${TEST_RECORDING_LIMIT_MS / 1000} Sekunden.`;
+    `Sprich das deutsche Wort. Die Aufnahme endet nach ${TEST_RECORDING_LIMIT_MS / 1000} Sekunden.`;
 
   $("record-button").classList.add("hidden");
   $("stop-button").classList.remove("hidden");
   $("stop-button").disabled = false;
-
   showMessage("Testaufnahme läuft …");
 
   logEvent("recording_started", item, {
@@ -1203,7 +1065,6 @@ function onTestRecorderStarted(item) {
   });
 
   startCountdownTimer();
-
   recordingDeadlineTimer = window.setTimeout(() => {
     if (mediaRecorder?.state === "recording") {
       manualStop = false;
@@ -1214,14 +1075,8 @@ function onTestRecorderStarted(item) {
 
 function startCountdownTimer() {
   countdownTimer = window.setInterval(() => {
-    const remaining = Math.max(
-      0,
-      wordCheckDeadline - performance.now()
-    );
-
-    $("timer-countdown").textContent =
-      (remaining / 1000).toFixed(1);
-
+    const remaining = Math.max(0, wordCheckDeadline - performance.now());
+    $("timer-countdown").textContent = (remaining / 1000).toFixed(1);
     if (remaining <= 0) {
       clearInterval(countdownTimer);
       countdownTimer = null;
@@ -1234,44 +1089,34 @@ async function startTestRecording() {
     showMessage("Bitte abmelden und erneut anmelden.", true);
     return;
   }
-
   if (!testRunState?.active || isBusy || mediaRecorder) return;
 
   const item = currentItem();
   if (!item) return;
 
+  $("evaluation-panel").classList.add("hidden");
+  $("evaluation-result").replaceChildren();
+
   try {
     setBusy(true);
     showMessage("Mikrofon wird vorbereitet …");
-
     const stream = await requestAudioStream();
     configureRecorder(stream, "test", item);
-
-    mediaRecorder.addEventListener(
-      "start",
-      () => onTestRecorderStarted(item),
-      { once: true }
-    );
-
+    mediaRecorder.addEventListener("start", () => onTestRecorderStarted(item), { once: true });
     mediaRecorder.start(RECORDING_CHUNK_MS);
   } catch (error) {
     console.error(error);
     stopMediaTracks();
     resetRecordingUi();
     setBusy(false);
-    showMessage(
-      error.message || "Testaufnahme konnte nicht gestartet werden.",
-      true
-    );
+    showMessage(error.message || "Testaufnahme konnte nicht gestartet werden.", true);
   }
 }
 
 function stopRecordingManually() {
   if (!mediaRecorder || mediaRecorder.state !== "recording") return;
-
   manualStop = true;
   clearRecordingTimers();
-
   $("stop-button").disabled = true;
   mediaRecorder.stop();
 }
@@ -1281,7 +1126,6 @@ function clearRecordingTimers() {
     clearTimeout(recordingDeadlineTimer);
     recordingDeadlineTimer = null;
   }
-
   if (countdownTimer !== null) {
     clearInterval(countdownTimer);
     countdownTimer = null;
@@ -1290,7 +1134,6 @@ function clearRecordingTimers() {
 
 function stopMediaTracks() {
   if (!recordingStream) return;
-
   recordingStream.getTracks().forEach(track => track.stop());
   recordingStream = null;
 }
@@ -1323,6 +1166,7 @@ function resetRecordingUi() {
 async function finishRecording() {
   clearRecordingTimers();
   showMessage("Aufnahme beendet. Audio wird vorbereitet …");
+  showAnalysisLoading("Aufnahme beendet. Audio wird vorbereitet …");
   stopMediaTracks();
 
   const mode = recordingMode;
@@ -1330,35 +1174,21 @@ async function finishRecording() {
   const startedAt = recordingStartedAt;
   const promptTime = promptShownAt;
   const timeLimitMs = getRecordingLimitMs(mode);
-  const testRunId = mode === "test"
-    ? testRunState?.id || null
-    : null;
-
+  const testRunId = mode === "test" ? testRunState?.id || null : null;
   const endReason = manualStop ? "manual" : "deadline";
 
   let durationMs = recordingStartedMonotonic === null
     ? 0
-    : Math.max(
-        0,
-        performance.now() - recordingStartedMonotonic
-      );
+    : Math.max(0, performance.now() - recordingStartedMonotonic);
 
-  if (timeLimitMs !== null) {
-    durationMs = Math.min(timeLimitMs, durationMs);
-  }
-
-  if (
-    (mode === "word_check" || mode === "test") &&
-    wordCheckStartedAt !== null
-  ) {
-    durationMs = Math.min(
-      timeLimitMs,
-      Math.max(0, performance.now() - wordCheckStartedAt)
-    );
+  if (timeLimitMs !== null) durationMs = Math.min(timeLimitMs, durationMs);
+  if ((mode === "word_check" || mode === "test") && wordCheckStartedAt !== null) {
+    durationMs = Math.min(timeLimitMs, Math.max(0, performance.now() - wordCheckStartedAt));
   }
 
   if (!item || !mediaRecorder) {
     wordCheckArmed = false;
+    hideAnalysisModal();
     resetRecordingUi();
     setBusy(false);
     return;
@@ -1377,8 +1207,7 @@ async function finishRecording() {
 
   if (mode === "word_check" || mode === "test") {
     $("timer-label").textContent = "Aufnahme beendet";
-    $("timer-countdown").textContent =
-      (durationMs / 1000).toFixed(1);
+    $("timer-countdown").textContent = (durationMs / 1000).toFixed(1);
     $("timer-help").textContent = "Die Antwort wird jetzt bewertet.";
   }
 
@@ -1389,24 +1218,19 @@ async function finishRecording() {
     updateWordCheckButton();
 
     if (mode === "test") {
-      await abandonLessonTest(
-        "Es wurden keine Audiodaten aufgenommen. " +
-        "Der Test wurde ohne Auszahlung abgebrochen."
-      );
+      const msg = "Es wurden keine Audiodaten aufgenommen. " +
+        "Der Test wurde ohne Auszahlung abgebrochen.";
+      await abandonLessonTest(msg);
+      showAnalysisNotice("Test abgebrochen", msg, true);
     } else {
-      showMessage(
-        "Keine Audiodaten aufgenommen. Bitte erneut versuchen.",
-        true
-      );
+      const msg = "Keine Audiodaten aufgenommen. Bitte erneut versuchen.";
+      showMessage(msg, true);
+      showAnalysisNotice("Keine Audiodaten", msg, true);
     }
-
     return;
   }
 
-  if (lastRecordingUrl) {
-    URL.revokeObjectURL(lastRecordingUrl);
-  }
-
+  if (lastRecordingUrl) URL.revokeObjectURL(lastRecordingUrl);
   lastRecordingUrl = URL.createObjectURL(sourceBlob);
 
   const recordingPlayer = $("recording-player");
@@ -1416,38 +1240,22 @@ async function finishRecording() {
   await logEvent(
     mode === "word_check" ? "word_check_completed" : "recording_stopped",
     item,
-    {
-      mode,
-      durationMs,
-      timeLimitMs,
-      endReason,
-      ...(testRunId ? { testRunId } : {})
-    }
+    { mode, durationMs, timeLimitMs, endReason, ...(testRunId ? { testRunId } : {}) }
   );
 
   await evaluateRecording({
-    item,
-    sourceBlob,
-    mode,
-    testRunId,
-    startedAt,
-    promptTime,
-    durationMs,
-    timeLimitMs,
-    endReason
+    item, sourceBlob, mode, testRunId, startedAt, promptTime, durationMs, timeLimitMs, endReason
   });
 }
 
 async function startLessonTest() {
   if (isBusy || wordCheckArmed || testRunState?.active) return;
-
   if (!currentApiKey) {
     showMessage("Bitte abmelden und erneut anmelden.", true);
     return;
   }
 
   const lessonId = $("lesson-select").value;
-
   await loadTestEligibility(lessonId);
 
   if (
@@ -1459,30 +1267,22 @@ async function startLessonTest() {
     return;
   }
 
-  if (
-    !items.length ||
-    items.some(item => item.max_reward_eur == null)
-  ) {
+  if (!items.length || items.some(item => item.max_reward_eur == null)) {
     showMessage(
-      "Test konnte nicht gestartet werden. Wortbeträge fehlen; " +
-      "prüfe die View learn_learner_items.",
+      "Test konnte nicht gestartet werden. Wortbeträge fehlen; prüfe learn_learner_items.",
       true
     );
     return;
   }
 
   if (testEligibility.completed) {
-    const previousReward = formatTestReward(
-      testEligibility.latestCompletedReward
-    );
+    const prevAriary = formatAriary(testEligibility.latestCompletedAriary);
     const confirmed = window.confirm(
-      `Du hast bereits ein gültiges Testergebnis (${previousReward}). ` +
+      `Du hast bereits ein gültiges Testergebnis (${prevAriary}). ` +
       "Wenn du den neuen Durchgang vollständig abschließt, ersetzt er " +
       "das bisherige Ergebnis – auch wenn der Betrag niedriger ist. " +
-      "Bei Abbruch bleibt dein bisheriges Ergebnis bestehen. " +
-      "Neuen Durchlauf starten?"
+      "Bei Abbruch bleibt dein bisheriges Ergebnis bestehen. Neuen Durchlauf starten?"
     );
-
     if (!confirmed) return;
   }
 
@@ -1491,21 +1291,14 @@ async function startLessonTest() {
 
   const { data, error } = await supabaseClient
     .from("learn_test_runs")
-    .insert({
-      user_id: currentUser.id,
-      lesson_id: lessonId,
-      status: "in_progress"
-    })
+    .insert({ user_id: currentUser.id, lesson_id: lessonId, status: "in_progress" })
     .select("id")
     .single();
 
   if (error) {
     console.error("Could not start test:", error);
     setBusy(false);
-    showMessage(
-      "Test konnte nicht gestartet werden: " + error.message,
-      true
-    );
+    showMessage("Test konnte nicht gestartet werden: " + error.message, true);
     return;
   }
 
@@ -1517,12 +1310,11 @@ async function startLessonTest() {
     index: 0,
     scoreSum: 0,
     reward: 0,
+    ariary: 0,
     active: true
   };
 
-  currentIndex = items.findIndex(
-    item => item.id === testRunState.queue[0].id
-  );
+  currentIndex = items.findIndex(item => item.id === testRunState.queue[0].id);
 
   await logEvent("test_started", null, {
     lessonId,
@@ -1532,23 +1324,20 @@ async function startLessonTest() {
   });
 
   setBusy(false);
+  renderEarnedAriary();
   renderItem();
   renderTestControls();
   showMessage(
-    "Der Test läuft. Tippe auf „Testantwort aufnehmen“, " +
-    "um das angezeigte Wort zu beantworten."
+    "Der Test läuft. Tippe auf „Testantwort aufnehmen“, um das angezeigte Wort zu beantworten."
   );
 }
 
 function shuffleItems(source) {
   const shuffled = [...source];
-
-  for (let index = shuffled.length - 1; index > 0; index--) {
-    const other = Math.floor(Math.random() * (index + 1));
-    [shuffled[index], shuffled[other]] =
-      [shuffled[other], shuffled[index]];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
-
   return shuffled;
 }
 
@@ -1569,79 +1358,69 @@ async function abandonLessonTest(message) {
     .eq("id", runId)
     .eq("user_id", currentUser.id);
 
-  if (error) {
-    console.error("Could not abandon test:", error);
-  }
+  if (error) console.error("Could not abandon test:", error);
 
-  await logEvent("test_abandoned", null, {
-    lessonId,
-    testRunId: runId,
-    reason: message
-  });
+  await logEvent("test_abandoned", null, { lessonId, testRunId: runId, reason: message });
 
   testRunState = null;
   setBusy(false);
+  renderEarnedAriary();
   await loadTestEligibility(lessonId);
   renderItem();
   showMessage(message, Boolean(error));
 }
 
-async function advanceLessonTest(score, expectedRunId) {
-  if (
-    !testRunState?.active ||
-    testRunState.id !== expectedRunId
-  ) {
-    return;
-  }
+async function advanceLessonTest(score, expectedRunId, wordAriary = null) {
+  if (!testRunState?.active || testRunState.id !== expectedRunId) return;
 
   const answeredItem = currentItem();
   const run = testRunState;
   const numericScore = Number(score);
 
   if (![0, 0.75, 1].includes(numericScore)) {
-    await abandonLessonTest(
-      "Ungültiger Testscore. Der Test wurde ohne Auszahlung abgebrochen."
-    );
+    const msg = "Ungültiger Testscore. Der Test wurde ohne Auszahlung abgebrochen.";
+    await abandonLessonTest(msg);
+    showAnalysisNotice("Test abgebrochen", msg, true);
     return;
   }
 
+  const earned = wordAriary !== null
+    ? wordAriary
+    : getWordEarnedAriary(run.queue.length, numericScore);
+
   run.scoreSum += numericScore;
-  run.reward +=
-    (Number(answeredItem.max_reward_eur) || 0) * numericScore;
+  run.reward += (Number(answeredItem.max_reward_eur) || 0) * numericScore;
+  run.ariary += earned;
   run.index += 1;
 
-  if (run.index < run.queue.length) {
-    currentIndex = items.findIndex(
-      item => item.id === run.queue[run.index].id
-    );
+  renderEarnedAriary();
 
-    renderItem();
+  if (run.index < run.queue.length) {
+    currentIndex = items.findIndex(item => item.id === run.queue[run.index].id);
+    renderItem({ keepEvaluation: true });
     renderTestControls();
     showMessage(
-      `Antwort gespeichert. ${run.index} von ${run.queue.length} Wörtern ` +
-      `bearbeitet. Vorläufig: ${formatTestReward(run.reward)}`
+      `Antwort gespeichert (+${formatAriary(earned)}). ${run.index} von ${run.queue.length} ` +
+      `Wörtern bearbeitet. Vorläufig: ${formatAriary(run.ariary)}`
     );
     return;
   }
 
   const finalScore = run.scoreSum / run.queue.length;
   const finalReward = Number(run.reward.toFixed(4));
+  const finalAriary = run.ariary;
 
-  const { error } = await supabaseClient.rpc(
-    "complete_learn_test_run",
-    {
-      p_run_id: run.id,
-      p_final_score: finalScore,
-      p_final_reward_eur: finalReward
-    }
-  );
+  const { error } = await supabaseClient.rpc("complete_learn_test_run", {
+    p_run_id: run.id,
+    p_final_score: finalScore,
+    p_final_reward_eur: finalReward
+  });
 
   if (error) {
     console.error("Could not complete test:", error);
-    await abandonLessonTest(
-      "Der Test konnte nicht sicher gespeichert werden. " +
-      "Es wurde kein neuer Betrag gutgeschrieben."
-    );
+    const msg = "Der Test konnte nicht sicher gespeichert werden. Es wurde kein Betrag gutgeschrieben.";
+    await abandonLessonTest(msg);
+    showAnalysisNotice("Speichern fehlgeschlagen", msg, true);
     return;
   }
 
@@ -1652,33 +1431,42 @@ async function advanceLessonTest(score, expectedRunId) {
     lessonId,
     testRunId: completedRunId,
     finalScore,
-    finalReward
+    finalReward,
+    finalAriary
   });
 
+  const previousLessonAriary = completedAriaryByLesson.get(lessonId) || 0;
+  completedAriaryByLesson.set(lessonId, finalAriary);
+  totalCompletedAriary = totalCompletedAriary - previousLessonAriary + finalAriary;
+
   testRunState = null;
+  renderEarnedAriary();
   await loadTestEligibility(lessonId);
-  renderItem();
+  renderItem({ keepEvaluation: true });
+
+  const summaryText =
+    `Lektionstest abgeschlossen! Endscore: ${finalScore.toFixed(2)} · ` +
+    `Gesamt für diese Lektion: ${formatAriary(finalAriary)}`;
+
+  for (const container of [$("evaluation-result"), $("analysis-modal-result")]) {
+    const finishLine = document.createElement("div");
+    finishLine.className = "ariary-earned-line";
+    finishLine.textContent = summaryText;
+    container.appendChild(finishLine);
+  }
 
   showMessage(
     `Lektionstest abgeschlossen. Endscore: ${finalScore.toFixed(2)}. ` +
-    `Gültiger Betrag: ${formatTestReward(finalReward)}. ` +
-    "Die Auszahlung wird später manuell geprüft."
+    `Verdient: ${formatAriary(finalAriary)}.`
   );
 }
 
 async function evaluateRecording({
-  item,
-  sourceBlob,
-  mode,
-  testRunId,
-  startedAt,
-  promptTime,
-  durationMs,
-  timeLimitMs,
-  endReason
+  item, sourceBlob, mode, testRunId, startedAt, promptTime, durationMs, timeLimitMs, endReason
 }) {
   setBusy(true);
   showMessage("Audio wird vorbereitet …");
+  showAnalysisLoading("Audio wird vorbereitet …");
 
   const attemptId = crypto.randomUUID();
   let originalWavBlob;
@@ -1694,60 +1482,47 @@ async function evaluateRecording({
     setBusy(false);
 
     if (mode === "test") {
-      await abandonLessonTest(
-        "Technisches Problem bei der Audioverarbeitung. " +
-        "Der Test wurde ohne Auszahlung abgebrochen."
-      );
+      const msg = "Technisches Problem bei der Audioverarbeitung. " +
+        "Der Test wurde ohne Auszahlung abgebrochen.";
+      await abandonLessonTest(msg);
+      showAnalysisNotice("Test abgebrochen", msg, true);
       return;
     }
 
     updateWordCheckButton();
-    showMessage(
-      `Audio konnte nicht verarbeitet werden: ${error.message || error}`,
-      true
-    );
+    const msg = `Audio konnte nicht verarbeitet werden: ${error.message || error}`;
+    showMessage(msg, true);
+    showAnalysisNotice("Audiofehler", msg, true);
     return;
   }
 
   let attemptNumber;
-
   try {
     attemptNumber = await getNextAttemptNumber(item.id, mode);
   } catch (error) {
     console.error("Could not get attempt number:", error);
     wordCheckArmed = false;
-
     if (mode === "test") {
-      await abandonLessonTest(
-        "Testversuch konnte nicht gespeichert werden. " +
-        "Der Test wurde ohne Auszahlung abgebrochen."
-      );
+      const msg = "Testversuch konnte nicht gespeichert werden. " +
+        "Der Test wurde ohne Auszahlung abgebrochen.";
+      await abandonLessonTest(msg);
+      showAnalysisNotice("Test abgebrochen", msg, true);
     } else {
       resetRecordingUi();
       setBusy(false);
-      showMessage("Versuchsnummer konnte nicht geladen werden.", true);
+      const msg = "Versuchsnummer konnte nicht geladen werden.";
+      showMessage(msg, true);
+      showAnalysisNotice("Speicherfehler", msg, true);
     }
-
     return;
   }
 
-  const audioPath =
-    `${currentUser.id}/${item.lesson_id}/${item.id}/${attemptId}.wav`;
+  const audioPath = `${currentUser.id}/${item.lesson_id}/${item.id}/${attemptId}.wav`;
 
   if (!trimmedAudio.hasSpeech) {
     const saveResult = await saveNoSpeechAttempt({
-      item,
-      mode,
-      testRunId,
-      attemptId,
-      attemptNumber,
-      originalWavBlob,
-      audioPath,
-      startedAt,
-      promptTime,
-      durationMs,
-      timeLimitMs,
-      endReason
+      item, mode, testRunId, attemptId, attemptNumber, originalWavBlob,
+      audioPath, startedAt, promptTime, durationMs, timeLimitMs, endReason
     });
 
     wordCheckArmed = false;
@@ -1757,52 +1532,42 @@ async function evaluateRecording({
 
     if (mode === "test") {
       if (!saveResult.ok) {
-        await abandonLessonTest(
-          "Die Testantwort konnte nicht gespeichert werden. " +
-          "Der Test wurde ohne Auszahlung abgebrochen."
-        );
+        const msg = "Die Testantwort konnte nicht gespeichert werden. " +
+          "Der Test wurde ohne Auszahlung abgebrochen.";
+        await abandonLessonTest(msg);
+        showAnalysisNotice("Test abgebrochen", msg, true);
         return;
       }
 
       showEvaluation({
-        item,
         pronunciation: null,
         recognized: false,
         finalScore: 0,
-        errors: [],
+        wordAriary: 0,
+        errors: ["Keine verständliche Sprache erkannt."],
         mode
       });
-
-      await advanceLessonTest(0, testRunId);
+      await advanceLessonTest(0, testRunId, 0);
       return;
     }
 
-    showMessage(
-      "Keine Sprache erkannt. Bitte sprich etwas lauter und versuche es erneut.",
-      true
-    );
+    const msg = "Keine Sprache erkannt. Bitte sprich etwas lauter und versuche es erneut.";
+    showMessage(msg, true);
+    showAnalysisNotice("Keine Sprache erkannt", msg, true);
     return;
   }
 
-  showMessage("Carbon bewertet die Antwort …");
+  showMessage("Antwort wird bewertet …");
+  showAnalysisLoading("Antwort wird bewertet … Dies kann einige Sekunden dauern.");
 
-  const [uploadResult, pronunciationResult] =
-    await Promise.allSettled([
-      uploadRecording(audioPath, originalWavBlob),
-      callPronunciationModel({
-        apiKey: currentApiKey,
-        item,
-        wavBlob: trimmedAudio.blob
-      })
-    ]);
+  const [uploadResult, pronunciationResult] = await Promise.allSettled([
+    uploadRecording(audioPath, originalWavBlob),
+    callPronunciationModel({ apiKey: currentApiKey, item, wavBlob: trimmedAudio.blob })
+  ]);
 
   const uploadSucceeded = uploadResult.status === "fulfilled";
-  const pronunciationSucceeded =
-    pronunciationResult.status === "fulfilled";
-
-  const pronunciation = pronunciationSucceeded
-    ? pronunciationResult.value
-    : null;
+  const pronunciationSucceeded = pronunciationResult.status === "fulfilled";
+  const pronunciation = pronunciationSucceeded ? pronunciationResult.value : null;
 
   let recognized = null;
   let finalScore = null;
@@ -1811,28 +1576,20 @@ async function evaluateRecording({
   const errors = [];
 
   if (pronunciationSucceeded) {
-    recognized =
-      normalizeWord(pronunciation.heardText) ===
-      normalizeWord(item.target_de);
-
+    recognized = normalizeWord(pronunciation.heardText) === normalizeWord(item.target_de);
     phonemeScore = pronunciation.match ? 1 : 0;
-
-    finalScore = !recognized
-      ? 0
-      : pronunciation.match
-        ? 1
-        : 0.75;
+    finalScore = !recognized ? 0 : pronunciation.match ? 1 : 0.75;
   } else {
     evaluationStatus = "error";
-    errors.push(`Carbon: ${errorText(pronunciationResult.reason)}`);
+    errors.push(errorText(pronunciationResult.reason));
   }
 
   if (!uploadSucceeded) {
     errors.push(`Audio-Upload: ${errorText(uploadResult.reason)}`);
   }
 
-  const isRestrictedMode =
-    mode === "word_check" || mode === "test";
+  const usedModel = pronunciation?.model || PRONUNCIATION_MODEL;
+  const isRestrictedMode = mode === "word_check" || mode === "test";
 
   const attemptRow = {
     client_attempt_id: attemptId,
@@ -1841,24 +1598,16 @@ async function evaluateRecording({
     test_run_id: mode === "test" ? testRunId : null,
     mode,
     attempt_number: attemptNumber,
-    client_started_at: startedAt
-      ? new Date(startedAt).toISOString()
-      : null,
-    prompt_finished_at: promptTime
-      ? new Date(promptTime).toISOString()
-      : null,
+    client_started_at: startedAt ? new Date(startedAt).toISOString() : null,
+    prompt_finished_at: promptTime ? new Date(promptTime).toISOString() : null,
     speech_started_at: null,
     recording_finished_at: new Date().toISOString(),
     reaction_time_ms: null,
     response_duration_ms: durationMs,
     time_limit_ms: timeLimitMs,
     recording_end_reason: endReason,
-    used_translation: isRestrictedMode
-      ? false
-      : usedTranslationForCurrentItem,
-    used_tts_audio: isRestrictedMode
-      ? false
-      : usedAudioForCurrentItem,
+    used_translation: isRestrictedMode ? false : usedTranslationForCurrentItem,
+    used_tts_audio: isRestrictedMode ? false : usedAudioForCurrentItem,
     stt_transcript: pronunciation?.heardText || null,
     target_word_recognized: recognized,
     phoneme_transcription: pronunciation?.ipa || null,
@@ -1867,16 +1616,14 @@ async function evaluateRecording({
     audio_path: uploadSucceeded ? audioPath : null,
     evaluation_status: evaluationStatus,
     evaluation_error: errors.length ? errors.join("\n") : null,
-    model_name: PRONUNCIATION_MODEL,
+    model_name: usedModel,
     model_version:
-      "NanoGPT Carbon combined transcript+IPA+pronunciation; " +
-      "reasoning_effort=low; max_tokens=1024; edge-trim=v1"
+      `${usedModel} transcript+IPA+pronunciation` +
+      (pronunciation?.fallbackFrom ? ` (fallback from ${pronunciation.fallbackFrom})` : "") +
+      "; reasoning_effort=low; max_tokens=1024; edge-trim=v1"
   };
 
-  const {
-    data: attemptData,
-    error: attemptInsertError
-  } = await supabaseClient
+  const { data: attemptData, error: attemptInsertError } = await supabaseClient
     .from("learn_attempts")
     .insert(attemptRow)
     .select("id")
@@ -1892,7 +1639,7 @@ async function evaluateRecording({
     attemptId: attemptData?.id || null,
     itemId: item.id,
     operation: "phoneme_analysis",
-    model: PRONUNCIATION_MODEL,
+    model: usedModel,
     status: pronunciation ? "success" : "error",
     cost: pronunciation?.cost ?? null,
     usage: pronunciation?.usage ?? null,
@@ -1900,14 +1647,11 @@ async function evaluateRecording({
   });
 
   if (mode === "test") {
-    showEvaluation({
-      item,
-      pronunciation,
-      recognized,
-      finalScore,
-      errors,
-      mode
-    });
+    const wordAriary = finalScore !== null && testRunState?.active
+      ? getWordEarnedAriary(testRunState.queue.length, finalScore)
+      : null;
+
+    showEvaluation({ pronunciation, recognized, finalScore, wordAriary, errors, mode });
 
     wordCheckArmed = false;
     resetRecordingUi();
@@ -1920,71 +1664,51 @@ async function evaluateRecording({
       evaluationStatus !== "complete" ||
       finalScore === null
     ) {
-      await abandonLessonTest(
-        "Technisches Problem bei der Testbewertung oder Speicherung. " +
-        "Der Test wurde ohne Auszahlung abgebrochen."
-      );
+      const msg = "Technisches Problem bei der Testbewertung oder Speicherung. " +
+        "Der Test wurde ohne Auszahlung abgebrochen.";
+      await abandonLessonTest(msg);
+      const errNote = document.createElement("div");
+      errNote.className = "evaluation-line";
+      errNote.style.color = "#a12626";
+      errNote.textContent = msg;
+      $("analysis-modal-result").appendChild(errNote);
       return;
     }
 
-    await advanceLessonTest(finalScore, testRunId);
+    await advanceLessonTest(finalScore, testRunId, wordAriary);
     return;
   }
 
   wordCheckArmed = false;
   await loadLearnerProgress();
-
-  showEvaluation({
-    item,
-    pronunciation,
-    recognized,
-    finalScore,
-    errors,
-    mode
-  });
-
+  showEvaluation({ pronunciation, recognized, finalScore, errors, mode });
   resetRecordingUi();
   setBusy(false);
   updateWordCheckButton();
 
   if (errors.length) {
     showMessage(
-      "Technisches Problem bei der Bewertung. " +
-      "Es wurde kein bestandenes Wort-Check-Ergebnis gespeichert.",
+      "Technisches Problem bei der Bewertung. Es wurde kein bestandenes Ergebnis gespeichert.",
       true
     );
   } else if (mode === "word_check" && finalScore === 1) {
     showMessage("Wort-Check bestanden: Score 1,0.", false);
   } else if (mode === "word_check" && finalScore === 0.75) {
     showMessage(
-      "Wort erkannt, Aussprache noch nicht vollständig akzeptiert. " +
-      "Übe weiter und versuche den Wort-Check erneut."
+      "Wort erkannt, Aussprache noch nicht vollständig akzeptiert. Übe weiter und versuche es erneut."
     );
   } else if (mode === "word_check") {
-    showMessage(
-      "Wort-Check nicht bestanden. Übe das Wort und versuche es erneut."
-    );
+    showMessage("Wort-Check nicht bestanden. Übe das Wort und versuche es erneut.");
   } else {
     showMessage("Bewertung abgeschlossen.", false);
   }
 }
 
 async function saveNoSpeechAttempt({
-  item,
-  mode,
-  testRunId,
-  attemptId,
-  attemptNumber,
-  originalWavBlob,
-  audioPath,
-  startedAt,
-  promptTime,
-  durationMs,
-  timeLimitMs,
-  endReason
+  item, mode, testRunId, attemptId, attemptNumber, originalWavBlob,
+  audioPath, startedAt, promptTime, durationMs, timeLimitMs, endReason
 }) {
   let uploadError = null;
-
   try {
     await uploadRecording(audioPath, originalWavBlob);
   } catch (error) {
@@ -1992,102 +1716,58 @@ async function saveNoSpeechAttempt({
   }
 
   const isTest = mode === "test";
-  const isRestrictedMode =
-    mode === "word_check" || isTest;
+  const isRestrictedMode = mode === "word_check" || isTest;
 
-  const { error: insertError } = await supabaseClient
-    .from("learn_attempts")
-    .insert({
-      client_attempt_id: attemptId,
-      user_id: currentUser.id,
-      item_id: item.id,
-      test_run_id: isTest ? testRunId : null,
-      mode,
-      attempt_number: attemptNumber,
-      client_started_at: startedAt
-        ? new Date(startedAt).toISOString()
-        : null,
-      prompt_finished_at: promptTime
-        ? new Date(promptTime).toISOString()
-        : null,
-      response_duration_ms: durationMs,
-      time_limit_ms: timeLimitMs,
-      recording_end_reason: endReason,
-      used_translation: isRestrictedMode
-        ? false
-        : usedTranslationForCurrentItem,
-      used_tts_audio: isRestrictedMode
-        ? false
-        : usedAudioForCurrentItem,
-      target_word_recognized: isTest ? false : null,
-      final_score: isTest ? 0 : null,
-      audio_path: uploadError ? null : audioPath,
-      evaluation_status: isTest ? "complete" : "error",
-      evaluation_error: isTest
-        ? null
-        : "No speech detected after edge silence trimming.",
-      model_version: "edge-trim-v1"
-    });
+  const { error: insertError } = await supabaseClient.from("learn_attempts").insert({
+    client_attempt_id: attemptId,
+    user_id: currentUser.id,
+    item_id: item.id,
+    test_run_id: isTest ? testRunId : null,
+    mode,
+    attempt_number: attemptNumber,
+    client_started_at: startedAt ? new Date(startedAt).toISOString() : null,
+    prompt_finished_at: promptTime ? new Date(promptTime).toISOString() : null,
+    response_duration_ms: durationMs,
+    time_limit_ms: timeLimitMs,
+    recording_end_reason: endReason,
+    used_translation: isRestrictedMode ? false : usedTranslationForCurrentItem,
+    used_tts_audio: isRestrictedMode ? false : usedAudioForCurrentItem,
+    target_word_recognized: isTest ? false : null,
+    final_score: isTest ? 0 : null,
+    audio_path: uploadError ? null : audioPath,
+    evaluation_status: isTest ? "complete" : "error",
+    evaluation_error: isTest ? null : "No speech detected after edge silence trimming.",
+    model_version: "edge-trim-v1"
+  });
 
-  if (insertError) {
-    console.error("Could not save no-speech attempt:", insertError);
-  }
+  if (insertError) console.error("Could not save no-speech attempt:", insertError);
+  if (uploadError) console.error("Could not upload no-speech attempt:", uploadError);
 
-  if (uploadError) {
-    console.error("Could not upload no-speech attempt:", uploadError);
-  }
-
-  return {
-    ok: !insertError && (!isTest || !uploadError),
-    insertError,
-    uploadError
-  };
+  return { ok: !insertError && (!isTest || !uploadError), insertError, uploadError };
 }
 
 async function convertBlobToWav(blob) {
-  const AudioContextClass =
-    window.AudioContext || window.webkitAudioContext;
-
-  if (!AudioContextClass) {
-    throw new Error("Web Audio API ist nicht verfügbar.");
-  }
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) throw new Error("Web Audio API ist nicht verfügbar.");
 
   const context = new AudioContextClass();
-
   try {
-    const input = await context.decodeAudioData(
-      await blob.arrayBuffer()
-    );
-
+    const input = await context.decodeAudioData(await blob.arrayBuffer());
     const outputRate = AUDIO_SAMPLE_RATE;
     const ratio = input.sampleRate / outputRate;
-    const outputLength = Math.max(
-      1,
-      Math.ceil(input.length / ratio)
-    );
-
+    const outputLength = Math.max(1, Math.ceil(input.length / ratio));
     const mono = new Float32Array(outputLength);
 
-    for (let channel = 0; channel < input.numberOfChannels; channel++) {
-      const source = input.getChannelData(channel);
-
-      for (let index = 0; index < outputLength; index++) {
-        const sourcePosition = index * ratio;
-        const left = Math.min(
-          Math.floor(sourcePosition),
-          source.length - 1
-        );
+    for (let ch = 0; ch < input.numberOfChannels; ch++) {
+      const source = input.getChannelData(ch);
+      for (let i = 0; i < outputLength; i++) {
+        const pos = i * ratio;
+        const left = Math.min(Math.floor(pos), source.length - 1);
         const right = Math.min(left + 1, source.length - 1);
-        const fraction = sourcePosition - left;
-
-        const sample =
-          source[left] * (1 - fraction) +
-          source[right] * fraction;
-
-        mono[index] += sample / input.numberOfChannels;
+        const frac = pos - left;
+        mono[i] += (source[left] * (1 - frac) + source[right] * frac) / input.numberOfChannels;
       }
     }
-
     return encodeWav(mono, outputRate);
   } finally {
     await context.close();
@@ -2095,120 +1775,52 @@ async function convertBlobToWav(blob) {
 }
 
 async function trimSilenceFromWav(wavBlob) {
-  const AudioContextClass =
-    window.AudioContext || window.webkitAudioContext;
-
-  if (!AudioContextClass) {
-    throw new Error("Web Audio API ist nicht verfügbar.");
-  }
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) throw new Error("Web Audio API ist nicht verfügbar.");
 
   const context = new AudioContextClass();
-
   try {
-    const decoded = await context.decodeAudioData(
-      await wavBlob.arrayBuffer()
-    );
-
+    const decoded = await context.decodeAudioData(await wavBlob.arrayBuffer());
     const sampleRate = decoded.sampleRate;
     const samples = decoded.getChannelData(0);
-
-    const windowSize = Math.max(
-      1,
-      Math.round(sampleRate * SILENCE_WINDOW_MS / 1000)
-    );
-
+    const windowSize = Math.max(1, Math.round(sampleRate * SILENCE_WINDOW_MS / 1000));
     const windows = [];
 
     for (let start = 0; start < samples.length; start += windowSize) {
       const end = Math.min(start + windowSize, samples.length);
       let sumSquares = 0;
-
-      for (let index = start; index < end; index++) {
-        sumSquares += samples[index] * samples[index];
-      }
-
-      windows.push({
-        start,
-        end,
-        rms: Math.sqrt(sumSquares / Math.max(1, end - start))
-      });
+      for (let i = start; i < end; i++) sumSquares += samples[i] * samples[i];
+      windows.push({ start, end, rms: Math.sqrt(sumSquares / Math.max(1, end - start)) });
     }
 
-    const peakRms = windows.reduce(
-      (peak, window) => Math.max(peak, window.rms),
-      0
-    );
+    const peakRms = windows.reduce((peak, w) => Math.max(peak, w.rms), 0);
+    const threshold = Math.max(ABSOLUTE_SPEECH_THRESHOLD, peakRms * RELATIVE_SPEECH_THRESHOLD);
+    const activeWindows = windows.filter(w => w.rms >= threshold);
+    const originalDurationMs = decoded.length / sampleRate * 1000;
 
-    const threshold = Math.max(
-      ABSOLUTE_SPEECH_THRESHOLD,
-      peakRms * RELATIVE_SPEECH_THRESHOLD
-    );
-
-    const activeWindows = windows.filter(
-      window => window.rms >= threshold
-    );
-
-    const originalDurationMs =
-      decoded.length / sampleRate * 1000;
-
-    if (
-      peakRms < ABSOLUTE_SPEECH_THRESHOLD ||
-      activeWindows.length < 2
-    ) {
-      return {
-        blob: wavBlob,
-        hasSpeech: false,
-        originalDurationMs,
-        trimmedDurationMs: originalDurationMs,
-        trimStartMs: 0,
-        trimEndMs: 0,
-        threshold
-      };
+    if (peakRms < ABSOLUTE_SPEECH_THRESHOLD || activeWindows.length < 2) {
+      return { blob: wavBlob, hasSpeech: false, originalDurationMs, trimmedDurationMs: originalDurationMs };
     }
 
-    const paddingSamples = Math.round(
-      sampleRate * SILENCE_PADDING_MS / 1000
-    );
-
-    const startSample = Math.max(
-      0,
-      activeWindows[0].start - paddingSamples
-    );
-
+    const paddingSamples = Math.round(sampleRate * SILENCE_PADDING_MS / 1000);
+    const startSample = Math.max(0, activeWindows[0].start - paddingSamples);
     const endSample = Math.min(
       decoded.length,
       activeWindows[activeWindows.length - 1].end + paddingSamples
     );
-
     const frameCount = endSample - startSample;
 
     if (frameCount <= 0) {
-      return {
-        blob: wavBlob,
-        hasSpeech: false,
-        originalDurationMs,
-        trimmedDurationMs: originalDurationMs,
-        trimStartMs: 0,
-        trimEndMs: 0,
-        threshold
-      };
+      return { blob: wavBlob, hasSpeech: false, originalDurationMs, trimmedDurationMs: originalDurationMs };
     }
 
     const monoOutput = new Float32Array(frameCount);
-    monoOutput.set(
-      decoded.getChannelData(0).slice(startSample, endSample)
-    );
-
-    const trimmedBlob = encodeWav(monoOutput, sampleRate);
-
+    monoOutput.set(decoded.getChannelData(0).slice(startSample, endSample));
     return {
-      blob: trimmedBlob,
+      blob: encodeWav(monoOutput, sampleRate),
       hasSpeech: true,
       originalDurationMs,
-      trimmedDurationMs: frameCount / sampleRate * 1000,
-      trimStartMs: startSample / sampleRate * 1000,
-      trimEndMs: (decoded.length - endSample) / sampleRate * 1000,
-      threshold
+      trimmedDurationMs: frameCount / sampleRate * 1000
     };
   } finally {
     await context.close();
@@ -2236,35 +1848,22 @@ function encodeWav(samples, sampleRate) {
   view.setUint32(40, dataSize, true);
 
   let offset = 44;
-
   for (const sample of samples) {
     const clipped = Math.max(-1, Math.min(1, sample));
-    const value = clipped < 0
-      ? clipped * 0x8000
-      : clipped * 0x7fff;
-
-    view.setInt16(offset, value, true);
+    view.setInt16(offset, clipped < 0 ? clipped * 0x8000 : clipped * 0x7fff, true);
     offset += 2;
   }
-
   return new Blob([buffer], { type: "audio/wav" });
 }
 
 function writeAscii(view, offset, text) {
-  for (let index = 0; index < text.length; index++) {
-    view.setUint8(offset + index, text.charCodeAt(index));
-  }
+  for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
 }
 
 async function uploadRecording(path, blob) {
-  const { error } = await supabaseClient
-    .storage
+  const { error } = await supabaseClient.storage
     .from(RECORDING_BUCKET)
-    .upload(path, blob, {
-      contentType: "audio/wav",
-      upsert: false
-    });
-
+    .upload(path, blob, { contentType: "audio/wav", upsert: false });
   if (error) throw error;
   return path;
 }
@@ -2276,18 +1875,11 @@ async function getNextAttemptNumber(itemId, mode) {
     .eq("user_id", currentUser.id)
     .eq("item_id", itemId)
     .eq("mode", mode);
-
-  if (error) {
-    console.warn("Could not count previous attempts:", error);
-    return 1;
-  }
-
+  if (error) return 1;
   return (count || 0) + 1;
 }
 
-async function callPronunciationModel({ apiKey, item, wavBlob }) {
-  const base64Audio = await blobToBase64(wavBlob);
-
+async function requestPronunciationModel({ apiKey, item, base64Audio, model }) {
   const prompt =
     "Analysiere das deutsche Audio. " +
     "Schritt 1: Transkribiere nur tatsächlich hörbare deutsche Wörter " +
@@ -2311,7 +1903,7 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
       "Accept": "application/json"
     },
     body: JSON.stringify({
-      model: PRONUNCIATION_MODEL,
+      model,
       stream: false,
       reasoning_effort: "low",
       max_tokens: 1024,
@@ -2320,13 +1912,7 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
           role: "user",
           content: [
             { type: "text", text: prompt },
-            {
-              type: "input_audio",
-              input_audio: {
-                data: base64Audio,
-                format: "wav"
-              }
-            }
+            { type: "input_audio", input_audio: { data: base64Audio, format: "wav" } }
           ]
         }
       ]
@@ -2335,87 +1921,52 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
 
   const requestId = response.headers.get("x-request-id");
   const bodyText = await response.text();
-
   if (!response.ok) {
-    throw new Error(
-      `HTTP ${response.status}: ${bodyText.slice(0, 700)}`
-    );
+    throw new Error(`HTTP ${response.status}: ${bodyText.slice(0, 700)}`);
   }
 
   let data;
-
   try {
     data = JSON.parse(bodyText);
   } catch {
-    throw new Error(
-      `Carbon-Antwort war kein JSON: ${bodyText.slice(0, 500)}`
-    );
+    throw new Error(`Antwort von ${model} war kein JSON: ${bodyText.slice(0, 500)}`);
   }
 
   let content = data.choices?.[0]?.message?.content;
-
   if (Array.isArray(content)) {
-    content = content
-      .filter(part => typeof part?.text === "string")
-      .map(part => part.text)
-      .join("");
+    content = content.filter(p => typeof p?.text === "string").map(p => p.text).join("");
   }
-
   content = String(content || "").trim();
 
   const jsonMatch = content.match(/\{[\s\S]*\}/);
-
   if (!jsonMatch) {
-    const notice = data.x_nanogpt_notice
-      ? ` NanoGPT-Hinweis: ${data.x_nanogpt_notice}`
-      : "";
-
-    throw new Error(
-      `Kein JSON in der Carbon-Antwort gefunden: ` +
-      `${content.slice(0, 500)}.${notice}`
-    );
+    const notice = data.x_nanogpt_notice ? ` NanoGPT-Hinweis: ${data.x_nanogpt_notice}` : "";
+    throw new Error(`Kein JSON in Antwort von ${model}: ${content.slice(0, 500)}.${notice}`);
   }
 
   let result;
-
   try {
     result = JSON.parse(jsonMatch[0]);
   } catch {
-    throw new Error(
-      `Ungültiges Carbon-JSON: ${jsonMatch[0].slice(0, 500)}`
-    );
+    throw new Error(`Ungültiges JSON von ${model}: ${jsonMatch[0].slice(0, 500)}`);
   }
 
   if (typeof result.heard_text !== "string") {
-    throw new Error(
-      "Carbon-Antwort enthält kein Textfeld 'heard_text'."
-    );
+    throw new Error(`${model}: Textfeld 'heard_text' fehlt.`);
   }
-
   if (typeof result.ipa !== "string") {
-    throw new Error(
-      "Carbon-Antwort enthält kein Textfeld 'ipa'."
-    );
+    throw new Error(`${model}: Textfeld 'ipa' fehlt.`);
   }
-
   if (typeof result.pronunciation_match !== "boolean") {
-    throw new Error(
-      "Carbon-Antwort enthält kein boolesches Feld " +
-      "'pronunciation_match'."
-    );
+    throw new Error(`${model}: Boolesches Feld 'pronunciation_match' fehlt.`);
   }
 
   let cost = costFromHeaders(response.headers);
-
-  if (cost === null) {
-    cost = costFromObject(data);
-  }
-
-  if (cost === null) {
-    cost = await lookupNanoCost(apiKey, requestId);
-  }
+  if (cost === null) cost = costFromObject(data);
+  if (cost === null) cost = await lookupNanoCost(apiKey, requestId);
 
   return {
+    model,
     heardText: result.heard_text.trim(),
     ipa: result.ipa.trim(),
     match: result.pronunciation_match,
@@ -2426,80 +1977,92 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
   };
 }
 
+async function callPronunciationModel({ apiKey, item, wavBlob }) {
+  const base64Audio = await blobToBase64(wavBlob);
+
+  try {
+    return await requestPronunciationModel({
+      apiKey, item, base64Audio, model: PRONUNCIATION_MODEL
+    });
+  } catch (primaryError) {
+    console.warn(
+      `Primary model ${PRONUNCIATION_MODEL} failed, falling back to ${PRONUNCIATION_FALLBACK_MODEL}:`,
+      primaryError
+    );
+    showAnalysisLoading("Carbon nicht verfügbar – wechsle auf Fallback-Modell (Hydrogen) …");
+
+    try {
+      const fallbackResult = await requestPronunciationModel({
+        apiKey, item, base64Audio, model: PRONUNCIATION_FALLBACK_MODEL
+      });
+      return {
+        ...fallbackResult,
+        fallbackFrom: PRONUNCIATION_MODEL,
+        primaryError: errorText(primaryError)
+      };
+    } catch (fallbackError) {
+      throw new Error(
+        `Carbon: ${errorText(primaryError)} | Hydrogen-Fallback: ${errorText(fallbackError)}`
+      );
+    }
+  }
+}
+
 async function blobToBase64(blob) {
   const buffer = await blob.arrayBuffer();
   const bytes = new Uint8Array(buffer);
   const chunkSize = 0x8000;
   let binary = "";
-
   for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    const chunk = bytes.subarray(offset, offset + chunkSize);
-    binary += String.fromCharCode(...chunk);
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
   }
-
   return btoa(binary);
 }
 
-function showEvaluation({
-  pronunciation,
-  recognized,
-  finalScore,
-  errors,
-  mode
+function buildEvaluationNodes({
+  pronunciation, recognized, finalScore, wordAriary = null, errors = [], mode
 }) {
-  const panel = $("evaluation-panel");
-  const result = $("evaluation-result");
-  result.replaceChildren();
-
-  const addLine = text => {
+  const fragment = document.createDocumentFragment();
+  const addLine = (text, className = "evaluation-line") => {
     const div = document.createElement("div");
-    div.className = "evaluation-line";
+    div.className = className;
     div.textContent = text;
-    result.appendChild(div);
+    fragment.appendChild(div);
   };
 
   if (pronunciation) {
+    const label = pronunciation.model === PRONUNCIATION_FALLBACK_MODEL
+      ? "Hydrogen (Fallback)"
+      : "Carbon";
+
     addLine(
-      `Carbon-Transkript: "${pronunciation.heardText || "(leer)"}" — ` +
+      `${label}-Transkript: "${pronunciation.heardText || "(leer)"}" — ` +
       (recognized ? "Zielwort erkannt" : "Zielwort nicht exakt erkannt")
     );
-
     addLine(
-      "Carbon-Aussprache: " +
-      (pronunciation.match
-        ? "Aussprache akzeptiert"
-        : "Aussprache nicht akzeptiert")
+      `${label}-Aussprache: ` +
+      (pronunciation.match ? "Aussprache akzeptiert" : "Aussprache nicht akzeptiert")
     );
-
-    if (pronunciation.ipa) {
-      addLine(`Erkannte Lautfolge: ${pronunciation.ipa}`);
+    if (pronunciation.ipa) addLine(`Erkannte Lautfolge: ${pronunciation.ipa}`);
+    if (pronunciation.fallbackFrom) {
+      addLine(`Hinweis: Fallback von ${pronunciation.fallbackFrom} auf ${pronunciation.model}.`);
     }
-
     if (pronunciation.usage) {
       addLine(
         `Tokens: ${pronunciation.usage.prompt_tokens ?? "—"} Input / ` +
         `${pronunciation.usage.completion_tokens ?? "—"} Output`
       );
     }
-
     if (pronunciation.cost !== null) {
-      addLine(
-        `Modellkosten: ${Number(pronunciation.cost).toFixed(6)} USD`
-      );
+      addLine(`Modellkosten: ${Number(pronunciation.cost).toFixed(6)} USD`);
     }
-
-    if (pronunciation.notice) {
-      addLine(`NanoGPT-Hinweis: ${pronunciation.notice}`);
-    }
+    if (pronunciation.notice) addLine(`NanoGPT-Hinweis: ${pronunciation.notice}`);
   } else {
-    addLine("Carbon: keine verwertbare Bewertung.");
+    addLine("Keine verwertbare Bewertung.");
   }
 
   if (finalScore !== null) {
-    const scoreLine = document.createElement("div");
-    scoreLine.className = "score";
-    scoreLine.textContent = `Score: ${finalScore}`;
-    result.appendChild(scoreLine);
+    addLine(`Score: ${finalScore}`, "score");
   } else {
     addLine("Kein Score: technische Bewertung unvollständig.");
   }
@@ -2513,14 +2076,53 @@ function showEvaluation({
   }
 
   if (mode === "test") {
-    addLine("Lektionstest-Antwort wurde bewertet.");
+    if (wordAriary !== null && wordAriary > 0) {
+      addLine(`Dieses Wort: +${formatAriary(wordAriary)}`, "ariary-earned-line");
+    } else if (finalScore !== null) {
+      addLine("Dieses Wort: +0 Ariary");
+    }
   }
 
-  if (errors.length) {
-    addLine(`Technische Hinweise: ${errors.join(" | ")}`);
+  if (errors.length) addLine(`Technische Hinweise: ${errors.join(" | ")}`);
+  return fragment;
+}
+
+function showEvaluation(params) {
+  const result = $("evaluation-result");
+  result.replaceChildren(buildEvaluationNodes(params));
+  $("evaluation-panel").classList.remove("hidden");
+
+  const modal = $("analysis-modal");
+  modal.classList.remove("hidden");
+  $("analysis-spinner").classList.add("hidden");
+
+  let title = "Valin'ny fanombanana";
+  let statusText = "Bewertung abgeschlossen.";
+  let isError = false;
+
+  if (params.errors?.length) {
+    title = "Hinweis zur Bewertung";
+    statusText = "Es ist ein technisches Problem aufgetreten.";
+    isError = true;
+  } else if (params.mode === "word_check") {
+    title = params.finalScore === 1 ? "Wort-Check bestanden" : "Wort-Check nicht bestanden";
+    statusText = params.finalScore === 1
+      ? "Sehr gut! Dieses Wort zählt als getestet."
+      : "Übe das Wort noch etwas und versuche es erneut.";
+    isError = params.finalScore !== 1;
+  } else if (params.mode === "test") {
+    title = params.finalScore > 0 ? "Testantwort akzeptiert" : "Testantwort nicht erkannt";
+    statusText = params.wordAriary > 0
+      ? `Verdient: +${formatAriary(params.wordAriary)}`
+      : "Für dieses Wort gibt es 0 Ariary.";
+    isError = params.finalScore === 0;
   }
 
-  panel.classList.remove("hidden");
+  $("analysis-modal-title").textContent = title;
+  $("analysis-modal-status").textContent = statusText;
+  $("analysis-modal-status").style.color = isError ? "#a12626" : "#236b37";
+  $("analysis-modal-result").replaceChildren(buildEvaluationNodes(params));
+  $("analysis-modal-close").classList.remove("hidden");
 }
 
 function errorText(error) {
@@ -2528,29 +2130,26 @@ function errorText(error) {
   return error.message || String(error);
 }
 
+$("analysis-modal-close").addEventListener("click", hideAnalysisModal);
+
 $("login-form").addEventListener("submit", async event => {
   event.preventDefault();
   $("login-message").textContent = "Anmeldung wird geprüft …";
-
   currentApiKey = null;
 
   let parsed;
-
   try {
     parsed = parseLoginString($("access-code").value);
   } catch (error) {
-    $("login-message").textContent =
-      error.message || "Ungültiger Login-String.";
+    $("login-message").textContent = error.message || "Ungültiger Login-String.";
     return;
   }
 
   const { accessCode, apiKey } = parsed;
-
-  const { data, error } = await supabaseClient.auth
-    .signInWithPassword({
-      email: `${accessCode}@malagasy.local`,
-      password: accessCode
-    });
+  const { data, error } = await supabaseClient.auth.signInWithPassword({
+    email: `${accessCode}@malagasy.local`,
+    password: accessCode
+  });
 
   if (error) {
     console.error(error);
@@ -2559,7 +2158,6 @@ $("login-form").addEventListener("submit", async event => {
   }
 
   currentApiKey = apiKey;
-
   try {
     await enterApp(data.user);
     $("login-message").textContent = "";
@@ -2597,52 +2195,26 @@ $("test-start-button").addEventListener("click", startLessonTest);
 
 $("test-abandon-button").addEventListener("click", async () => {
   if (!testRunState?.active || isBusy || mediaRecorder) return;
-
   const confirmed = window.confirm(
     "Test abbrechen? Die vorläufige Summe dieses Durchgangs wird verworfen; " +
     "ein früheres gültiges Ergebnis bleibt erhalten."
   );
-
   if (confirmed) {
-    await abandonLessonTest(
-      "Test abgebrochen. Die vorläufige Summe wurde verworfen."
-    );
+    await abandonLessonTest("Test abgebrochen. Die vorläufige Summe wurde verworfen.");
   }
 });
 
 $("repeat-button").addEventListener("click", async () => {
   const item = currentItem();
-  if (
-    !item ||
-    isBusy ||
-    mediaRecorder ||
-    wordCheckArmed ||
-    testRunState?.active
-  ) {
-    return;
-  }
-
+  if (!item || isBusy || mediaRecorder || wordCheckArmed || testRunState?.active) return;
   await logEvent("item_repeated", item, { index: currentIndex });
   renderItem();
 });
 
 $("skip-button").addEventListener("click", async () => {
-  if (
-    !items.length ||
-    isBusy ||
-    mediaRecorder ||
-    wordCheckArmed ||
-    testRunState?.active
-  ) {
-    return;
-  }
-
+  if (!items.length || isBusy || mediaRecorder || wordCheckArmed || testRunState?.active) return;
   const item = currentItem();
-
-  if (item) {
-    await logEvent("item_skipped", item, { index: currentIndex });
-  }
-
+  if (item) await logEvent("item_skipped", item, { index: currentIndex });
   currentIndex = (currentIndex + 1) % items.length;
   renderItem();
 });
@@ -2650,24 +2222,21 @@ $("skip-button").addEventListener("click", async () => {
 // TEMPORÄR: Reset-Button für die Testphase; später entfernen
 $("reset-tests-button")?.addEventListener("click", async () => {
   if (isBusy || mediaRecorder) return;
-
   const confirmed = window.confirm(
     "Alle gespeicherten Endtests und Wort-Checks zurücksetzen?"
   );
-
   if (!confirmed) return;
 
   setBusy(true);
   showMessage("Gespeicherte Tests werden zurückgesetzt …");
-
   const { error } = await supabaseClient.rpc("reset_my_tests");
 
   if (error) {
     console.error("Could not reset tests:", error);
     setBusy(false);
     showMessage(
-      "Zurücksetzen fehlgeschlagen (wurde das SQL für reset_my_tests " +
-      "ausgeführt?): " + error.message,
+      "Zurücksetzen fehlgeschlagen (wurde das SQL für reset_my_tests ausgeführt?): " +
+      error.message,
       true
     );
     return;
@@ -2677,6 +2246,7 @@ $("reset-tests-button")?.addEventListener("click", async () => {
   wordCheckArmed = false;
 
   const lessonId = $("lesson-select").value;
+  await loadTotalEarnedAriary();
   await loadLearnerProgress();
   await loadTestEligibility(lessonId);
 
@@ -2693,14 +2263,7 @@ $("logout-button").addEventListener("click", async () => {
 
 async function restoreSession() {
   const { data, error } = await supabaseClient.auth.getSession();
-
-  if (error) {
-    console.error(error);
-    return;
-  }
-
-  if (!data.session?.user) return;
-
+  if (error || !data.session?.user) return;
   try {
     await enterApp(data.session.user);
   } catch (profileError) {
