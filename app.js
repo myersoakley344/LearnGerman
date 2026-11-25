@@ -61,6 +61,7 @@ let testRunState = null;
 let testEligibility = {
   starts: 0,
   completed: false,
+  maxScoreReached: false,
   latestCompletedScore: null,
   latestCompletedAriary: 0,
   loadFailed: false
@@ -77,7 +78,7 @@ function showMessage(text, isError = false) {
 function showAnalysisLoading(statusText) {
   $("analysis-modal").classList.remove("hidden");
   $("analysis-spinner").classList.remove("hidden");
-  $("analysis-modal-title").textContent = "Analyse läuft …";
+  $("analysis-modal-title").textContent = "Mandeha ny fanombanana …";
   $("analysis-modal-status").textContent = statusText;
   $("analysis-modal-status").style.color = "#53616f";
   $("analysis-modal-result").replaceChildren();
@@ -147,8 +148,10 @@ function setBusy(value) {
   $("repeat-button").disabled = value;
   $("skip-button").disabled = value;
 
-  const resetBtn = $("reset-tests-button");
-  if (resetBtn) resetBtn.disabled = value;
+  const adminInput = $("admin-code-input");
+  const adminSubmit = $("admin-code-submit");
+  if (adminInput) adminInput.disabled = value;
+  if (adminSubmit) adminSubmit.disabled = value;
 
   updateWordCheckButton();
   renderTestControls();
@@ -172,7 +175,7 @@ function getNanoGPTConfig() {
     !config.profileCodes ||
     typeof config.profileCodes !== "object"
   ) {
-    throw new Error("Konfiguration fehlt. Prüfe config.js.");
+    throw new Error("Tsy ampy ny fikirakirana (config.js).");
   }
   return config;
 }
@@ -183,17 +186,17 @@ function parseLoginString(value) {
     .match(/^(\d{2})_([A-Za-z0-9]{4})_([A-Za-z0-9]{4})$/);
 
   if (!match) {
-    throw new Error("Bitte den Login im Format 01_7351_abcd eingeben.");
+    throw new Error("Ampidiro amin'ny endrika 01_7351_abcd ny kaody.");
   }
 
   const [, participantNumber, profileCode, keyFragment] = match;
   const config = getNanoGPTConfig();
 
   if (!config.profileCodes[participantNumber]) {
-    throw new Error("Unbekanntes Teilnehmerprofil.");
+    throw new Error("Tsy fantatra ny kaonty.");
   }
   if (config.profileCodes[participantNumber] !== profileCode) {
-    throw new Error("Profilcode stimmt nicht.");
+    throw new Error("Diso ny kaody fidirana.");
   }
 
   return {
@@ -312,7 +315,7 @@ async function getProfile(user) {
 async function enterApp(user) {
   const profile = await getProfile(user);
   if (profile.role !== "learner") {
-    throw new Error("This account is not a learner account.");
+    throw new Error("Tsy kaonty mpianatra ity kaonty ity.");
   }
 
   currentUser = user;
@@ -407,7 +410,7 @@ async function loadTotalEarnedAriary() {
 }
 
 async function loadLessons() {
-  showMessage("Loading lessons...");
+  showMessage("Maka ny lesona …");
   const { data, error } = await supabaseClient
     .from("learn_lessons")
     .select("id, slug, title, order_index")
@@ -416,7 +419,7 @@ async function loadLessons() {
 
   if (error) {
     console.error(error);
-    showMessage(error.message, true);
+    showMessage("Tsy voaray ny lesona.", true);
     return;
   }
 
@@ -434,7 +437,7 @@ async function loadLessons() {
   if (!lessons.length) {
     items = [];
     renderItem();
-    showMessage("No published lessons found.", true);
+    showMessage("Tsy misy lesona hita.", true);
     return;
   }
 
@@ -443,13 +446,11 @@ async function loadLessons() {
 
 async function loadItems(lessonId) {
   if (testRunState?.active || wordCheckArmed) {
-    showMessage(
-      "Während eines Tests oder Wort-Checks kann die Lektion nicht gewechselt werden."
-    );
+    showMessage("Tsy azo ovaina ny lesona mandritra ny fitsapana.", true);
     return;
   }
 
-  showMessage("Loading lesson...");
+  showMessage("Maka ny teny …");
   const { data, error } = await supabaseClient
     .from("learn_learner_items")
     .select("id, lesson_id, order_index, prompt_mg, target_de, tts_audio_path, max_reward_eur")
@@ -460,7 +461,7 @@ async function loadItems(lessonId) {
     console.error(error);
     items = [];
     renderItem();
-    showMessage(error.message, true);
+    showMessage("Tsy voaray ny lesona.", true);
     return;
   }
 
@@ -498,7 +499,7 @@ async function loadLearnerProgress() {
 
   if (error) {
     console.error("Could not load learner progress:", error);
-    showMessage("Fortschritt konnte nicht geladen werden: " + error.message, true);
+    showMessage("Tsy voaray ny fivoarana.", true);
     renderProgress();
     return;
   }
@@ -525,6 +526,7 @@ async function loadTestEligibility(lessonId) {
   testEligibility = {
     starts: 0,
     completed: false,
+    maxScoreReached: false,
     latestCompletedScore: null,
     latestCompletedAriary: completedAriaryByLesson.get(lessonId) || 0,
     loadFailed: false
@@ -565,6 +567,8 @@ async function loadTestEligibility(lessonId) {
   testEligibility.starts = runs.length;
   testEligibility.completed = Boolean(validRun);
   testEligibility.latestCompletedScore = validRun ? validRun.final_score : null;
+  testEligibility.maxScoreReached =
+    Boolean(validRun) && Number(validRun.final_score) >= 0.9999;
   testEligibility.latestCompletedAriary = validRun
     ? completedAriaryByLesson.get(lessonId) ||
       Math.round((Number(validRun.final_score) || 0) * items.length * getWordMaxAriary(items.length))
@@ -586,10 +590,10 @@ function renderTestControls() {
 
   if (active) {
     status.textContent =
-      `Test läuft: ${testRunState.index} von ${testRunState.queue.length} Wörtern beantwortet.`;
-    reward.textContent = `Vorläufig verdient: ${formatAriary(testRunState.ariary)}`;
+      `Mandeha ny fitsapana: teny ${testRunState.index} amin'ny ${testRunState.queue.length} voavaly.`;
+    reward.textContent = `Vola vonjimaika: ${formatAriary(testRunState.ariary)}`;
     reward.classList.remove("hidden");
-    startBtn.textContent = "Lektionstest starten";
+    startBtn.textContent = "Hanomboka ny fitsapana";
     startBtn.disabled = true;
     return;
   }
@@ -597,19 +601,28 @@ function renderTestControls() {
   reward.classList.add("hidden");
 
   if (testEligibility.loadFailed) {
-    startBtn.textContent = "Lektionstest starten";
-    status.textContent = "Teststatus konnte nicht geladen werden. Bitte Seite neu laden.";
+    startBtn.textContent = "Hanomboka ny fitsapana";
+    status.textContent = "Tsy voaray ny satan'ny fitsapana. Avereno sokafana ny pejy.";
+    startBtn.disabled = true;
+    return;
+  }
+
+  if (testEligibility.maxScoreReached) {
+    startBtn.textContent = "Vita tanteraka";
+    status.textContent =
+      `Nahazo isa feno (${Number(testEligibility.latestCompletedScore).toFixed(2)} · ` +
+      `${formatAriary(testEligibility.latestCompletedAriary)}). Tsy azo averina intsony.`;
     startBtn.disabled = true;
     return;
   }
 
   if (testEligibility.starts >= MAX_TEST_STARTS) {
-    startBtn.textContent = "Lektionstest starten";
+    startBtn.textContent = "Hanomboka ny fitsapana";
     status.textContent = testEligibility.completed
-      ? `Startlimit (${MAX_TEST_STARTS}/${MAX_TEST_STARTS}) erreicht. Gültiges Ergebnis: ` +
-        `Score ${Number(testEligibility.latestCompletedScore).toFixed(2)} ` +
+      ? `Tapitra ny fanombohana (${MAX_TEST_STARTS}/${MAX_TEST_STARTS}). ` +
+        `Isa manankery: ${Number(testEligibility.latestCompletedScore).toFixed(2)} ` +
         `(${formatAriary(testEligibility.latestCompletedAriary)}).`
-      : `Das Startlimit von ${MAX_TEST_STARTS} Tests wurde erreicht.`;
+      : `Tapitra ny fetra fanombohana ${MAX_TEST_STARTS}.`;
     startBtn.disabled = true;
     return;
   }
@@ -618,25 +631,25 @@ function renderTestControls() {
   const passed = getPassedWordCheckCount();
 
   if (passed < required) {
-    startBtn.textContent = "Lektionstest starten";
+    startBtn.textContent = "Hanomboka ny fitsapana";
     status.textContent =
-      `Freischaltung: ${passed} von ${required} Wörtern im Wort-Check bestanden.`;
+      `Fanokafana: teny ${passed} amin'ny ${required} voasedra tsara.`;
     startBtn.disabled = true;
     return;
   }
 
   const remaining = MAX_TEST_STARTS - testEligibility.starts;
   if (testEligibility.completed) {
-    startBtn.textContent = "Lektionstest wiederholen";
+    startBtn.textContent = "Avereno ny fitsapana";
     status.textContent =
-      `Aktuelles gültiges Ergebnis: Score ${Number(testEligibility.latestCompletedScore).toFixed(2)} ` +
+      `Isa manankery ankehitriny: ${Number(testEligibility.latestCompletedScore).toFixed(2)} ` +
       `(${formatAriary(testEligibility.latestCompletedAriary)}). ` +
-      `Verbleibende Starts: ${remaining} von ${MAX_TEST_STARTS}. ` +
-      "Ein neu abgeschlossener Test ersetzt das bisherige Ergebnis.";
+      `Andrana sisa: ${remaining} amin'ny ${MAX_TEST_STARTS}. ` +
+      "Manolo ny vokatra teo aloha ny fitsapana vaovao vita.";
   } else {
-    startBtn.textContent = "Lektionstest starten";
+    startBtn.textContent = "Hanomboka ny fitsapana";
     status.textContent =
-      `Freigeschaltet. Verfügbare Starts: ${remaining} von ${MAX_TEST_STARTS}.`;
+      `Misokatra. Andrana azo atao: ${remaining} amin'ny ${MAX_TEST_STARTS}.`;
   }
 
   startBtn.disabled = isBusy || wordCheckArmed;
@@ -645,17 +658,17 @@ function renderTestControls() {
 function renderProgress() {
   const passedCount = getPassedWordCheckCount();
   $("word-check-progress").textContent =
-    `${passedCount} von ${items.length} Wörtern erfolgreich getestet`;
+    `${passedCount} amin'ny ${items.length} teny voasedra tsara`;
 
   const required = getRequiredWordsForTest();
   if (!items.length) {
     $("test-unlock-status").textContent = "";
   } else if (passedCount >= required) {
-    $("test-unlock-status").textContent = "Voraussetzung für den Lektionstest erfüllt.";
+    $("test-unlock-status").textContent = "Azo atomboka ny fitsapana farany.";
   } else {
     $("test-unlock-status").textContent =
-      `Für den Lektionstest: ${passedCount} von ${required} Wörtern im Wort-Check bestanden. ` +
-      "Den Wort-Check kannst du jederzeit starten und beliebig oft wiederholen.";
+      `Ho an'ny fitsapana farany: teny ${passedCount} amin'ny ${required} no voasedra. ` +
+      "Azo atao na oviana na oviana ny fitsapana teny.";
   }
 
   renderCurrentWordStatus();
@@ -672,10 +685,10 @@ function renderCurrentWordStatus() {
     return;
   }
   if (passedWordChecks.has(item.id)) {
-    badge.textContent = "Wort-Check bestanden";
+    badge.textContent = "Teny voasedra tsara";
     badge.classList.add("passed");
   } else {
-    badge.textContent = "Wort-Check noch offen";
+    badge.textContent = "Tsy mbola voasedra";
     badge.classList.remove("passed");
   }
 }
@@ -692,13 +705,8 @@ function getTtsUrl(path) {
   return supabaseClient.storage.from(TTS_BUCKET).getPublicUrl(path).data.publicUrl;
 }
 
-function renderItem({ keepEvaluation = false } = {}) {
+function renderItem({ keepMessage = false } = {}) {
   const item = currentItem();
-
-  if (!keepEvaluation) {
-    $("evaluation-panel").classList.add("hidden");
-    $("evaluation-result").replaceChildren();
-  }
 
   $("translation").classList.add("hidden");
   $("translation").textContent = "";
@@ -720,7 +728,7 @@ function renderItem({ keepEvaluation = false } = {}) {
   if (!item) {
     wordCheckArmed = false;
     $("app-screen").classList.remove("word-check-armed");
-    $("prompt").textContent = "No items in this lesson.";
+    $("prompt").textContent = "Tsy misy teny ato amin'ity lesona ity.";
     $("item-position").textContent = "";
     $("reveal-button").disabled = true;
     $("play-audio-button").disabled = true;
@@ -739,7 +747,7 @@ function renderItem({ keepEvaluation = false } = {}) {
     wordCheckArmed = false;
     $("app-screen").classList.remove("word-check-armed");
     $("item-position").textContent =
-      `Testwort ${testRunState.index + 1} / ${testRunState.queue.length}`;
+      `Fitsapana ${testRunState.index + 1} / ${testRunState.queue.length}`;
     $("reveal-button").classList.add("hidden");
     $("translation").classList.add("hidden");
     $("play-audio-button").classList.add("hidden");
@@ -748,14 +756,14 @@ function renderItem({ keepEvaluation = false } = {}) {
     $("word-check-cancel-button").classList.add("hidden");
     $("repeat-button").classList.add("hidden");
     $("skip-button").classList.add("hidden");
-    $("record-button").textContent = "Testantwort aufnehmen";
+    $("record-button").textContent = "Handray feo (Fitsapana)";
     $("record-button").classList.remove("hidden");
     $("record-button").disabled = isBusy;
     $("lesson-select").disabled = true;
   } else if (wordCheckArmed) {
     $("app-screen").classList.add("word-check-armed");
     $("item-position").textContent =
-      `Teny ${currentIndex + 1} / ${items.length} · Wort-Check`;
+      `Teny ${currentIndex + 1} / ${items.length} · Fitsapana teny`;
     $("reveal-button").classList.add("hidden");
     $("translation").classList.add("hidden");
     $("play-audio-button").classList.add("hidden");
@@ -763,7 +771,7 @@ function renderItem({ keepEvaluation = false } = {}) {
     $("word-check-button").classList.add("hidden");
     $("repeat-button").classList.add("hidden");
     $("skip-button").classList.add("hidden");
-    $("record-button").textContent = "Wort-Check-Aufnahme starten";
+    $("record-button").textContent = "Hanomboka handray feo";
     $("record-button").classList.remove("hidden");
     $("record-button").disabled = isBusy;
     $("word-check-cancel-button").classList.remove("hidden");
@@ -778,7 +786,7 @@ function renderItem({ keepEvaluation = false } = {}) {
     $("word-check-cancel-button").classList.add("hidden");
     $("repeat-button").classList.remove("hidden");
     $("skip-button").classList.remove("hidden");
-    $("record-button").textContent = "Aufnahme mit Bewertung";
+    $("record-button").textContent = "Handray feo sy hanombana";
     $("record-button").classList.remove("hidden");
     $("lesson-select").disabled = isBusy;
     $("reveal-button").disabled = isBusy;
@@ -792,7 +800,7 @@ function renderItem({ keepEvaluation = false } = {}) {
 
   if (!wordCheckArmed) {
     logEvent("item_shown", item, { index: currentIndex });
-    if (!keepEvaluation) showMessage("");
+    if (!keepMessage) showMessage("");
   }
 }
 
@@ -808,7 +816,7 @@ function revealTranslation() {
 async function playTts() {
   const item = currentItem();
   if (!item?.tts_audio_path) {
-    showMessage("No TTS audio is available for this item.", true);
+    showMessage("Tsy misy feo ho an'ity teny ity.", true);
     return;
   }
   if (testRunState?.active || wordCheckArmed || recordingMode === "word_check") return;
@@ -823,7 +831,7 @@ async function playTts() {
     await player.play();
   } catch (error) {
     console.error(error);
-    showMessage("Could not play the audio. Tap the audio player.", true);
+    showMessage("Tsy nandeha ny feo. Tsindrio ny mpandefa feo.", true);
   }
 }
 
@@ -844,7 +852,7 @@ function getRecordingLimitMs(mode) {
 async function requestAudioStream() {
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
     throw new Error(
-      "Dieser Browser unterstützt keine Audioaufnahme. Bitte Chrome auf Android verwenden."
+      "Tsy manohana ny fandraisam-peo ity navigateur ity. Ampiasao Chrome amin'ny Android."
     );
   }
   return navigator.mediaDevices.getUserMedia({
@@ -905,24 +913,22 @@ function configureRecorder(stream, mode, item) {
       updateWordCheckButton();
 
       if (testRunState?.active) {
-        const msg = "Technisches Problem beim Verarbeiten der Testaufnahme. " +
-          "Der Test wurde ohne Auszahlung abgebrochen.";
+        const msg = "Nisy olana ara-teknika tamin'ny fandraisam-peo. Najanona ny fitsapana.";
         await abandonLessonTest(msg);
-        showAnalysisNotice("Test abgebrochen", msg, true);
+        showAnalysisNotice("Najanona ny fitsapana", msg, true);
         return;
       }
 
-      const msg = "Die Aufnahme konnte nicht verarbeitet werden. " +
-        (error.message || String(error));
+      const msg = "Tsy voakarakara ny feo noraisina.";
       showMessage(msg, true);
-      showAnalysisNotice("Aufnahme fehlgeschlagen", msg, true);
+      showAnalysisNotice("Tsy nahomby ny fandraisam-peo", msg, true);
     });
   }, { once: true });
 }
 
 async function startPracticeRecording() {
   if (!currentApiKey) {
-    showMessage("Bitte abmelden und erneut anmelden.", true);
+    showMessage("Mivoaha azafady dia midira indray.", true);
     return;
   }
   const item = currentItem();
@@ -930,7 +936,7 @@ async function startPracticeRecording() {
 
   try {
     setBusy(true);
-    showMessage("Mikrofon wird vorbereitet … Die Aufnahme endet spätestens nach 20 Sekunden.");
+    showMessage("Manomana ny mikrô … Mifarana ho azy afaka 20 segondra.");
     const stream = await requestAudioStream();
     configureRecorder(stream, "practice", item);
     mediaRecorder.addEventListener("start", () => onPracticeRecorderStarted(item), { once: true });
@@ -940,7 +946,7 @@ async function startPracticeRecording() {
     stopMediaTracks();
     resetRecordingUi();
     setBusy(false);
-    showMessage(error.message || "Aufnahme konnte nicht gestartet werden.", true);
+    showMessage(error.message || "Tsy afaka nanomboka ny fandraisam-peo.", true);
   }
 }
 
@@ -949,7 +955,7 @@ function onPracticeRecorderStarted(item) {
   $("word-check-button").classList.add("hidden");
   $("stop-button").classList.remove("hidden");
   $("stop-button").disabled = false;
-  showMessage("Aufnahme läuft. Tippe auf „Fertig“; automatisch endet sie nach 20 Sekunden.");
+  showMessage("Mandeha ny fandraisam-peo. Tsindrio ny « Vita » rehefa tapitra.");
 
   logEvent("recording_started", item, { mode: "practice", timeLimitMs: PRACTICE_RECORDING_LIMIT_MS });
   recordingDeadlineTimer = window.setTimeout(() => {
@@ -962,7 +968,7 @@ function onPracticeRecorderStarted(item) {
 
 function armWordCheck() {
   if (!currentApiKey) {
-    showMessage("Bitte abmelden und erneut anmelden.", true);
+    showMessage("Mivoaha azafady dia midira indray.", true);
     return;
   }
   const item = currentItem();
@@ -970,10 +976,7 @@ function armWordCheck() {
 
   wordCheckArmed = true;
   renderItem();
-  showMessage(
-    "Bereit für den Wort-Check. Tippe auf „Wort-Check-Aufnahme starten“, " +
-    "um das Wort anzuzeigen und aufzunehmen."
-  );
+  showMessage("Tsindrio ny « Hanomboka handray feo » rehefa vonona.");
 }
 
 function cancelWordCheck() {
@@ -984,14 +987,14 @@ function cancelWordCheck() {
 
 async function startWordCheckRecording() {
   if (!currentApiKey) {
-    showMessage("Bitte abmelden und erneut anmelden.", true);
+    showMessage("Mivoaha azafady dia midira indray.", true);
     return;
   }
   const item = currentItem();
   if (!item || !wordCheckArmed || isBusy || mediaRecorder || testRunState?.active) return;
 
   setBusy(true);
-  showMessage("Mikrofon wird vorbereitet …");
+  showMessage("Manomana ny mikrô …");
   try {
     const stream = await requestAudioStream();
     configureRecorder(stream, "word_check", item);
@@ -1003,7 +1006,7 @@ async function startWordCheckRecording() {
     wordCheckArmed = false;
     resetRecordingUi();
     setBusy(false);
-    showMessage(error.message || "Aufnahme konnte nicht gestartet werden.", true);
+    showMessage(error.message || "Tsy afaka nanomboka ny fandraisam-peo.", true);
   }
 }
 
@@ -1015,9 +1018,9 @@ function onWordCheckRecorderStarted(item) {
   $("prompt").textContent = item.prompt_mg;
   $("timer-panel").classList.remove("hidden");
   $("timer-countdown").textContent = (WORD_CHECK_LIMIT_MS / 1000).toFixed(1);
-  $("timer-label").textContent = "Wort-Check läuft";
+  $("timer-label").textContent = "Mandeha ny fitsapana teny";
   $("timer-help").textContent =
-    `Sprich das deutsche Wort. Die Aufnahme endet spätestens nach ${WORD_CHECK_LIMIT_MS / 1000} Sekunden.`;
+    `Lazao amin'ny teny alemà. Mifarana afaka ${WORD_CHECK_LIMIT_MS / 1000} segondra.`;
 
   $("record-button").classList.add("hidden");
   $("word-check-button").classList.add("hidden");
@@ -1028,7 +1031,7 @@ function onWordCheckRecorderStarted(item) {
   $("tts-player").classList.add("hidden");
   $("stop-button").classList.remove("hidden");
   $("stop-button").disabled = false;
-  showMessage("Aufnahme läuft …");
+  showMessage("Mandeha ny fandraisam-peo …");
 
   logEvent("word_check_started", item, { timeLimitMs: WORD_CHECK_LIMIT_MS });
   startCountdownTimer();
@@ -1049,14 +1052,14 @@ function onTestRecorderStarted(item) {
   $("timer-panel").classList.remove("hidden");
   $("timer-countdown").textContent = (TEST_RECORDING_LIMIT_MS / 1000).toFixed(1);
   $("timer-label").textContent =
-    `Testwort ${testRunState.index + 1} von ${testRunState.queue.length}`;
+    `Teny ${testRunState.index + 1} amin'ny ${testRunState.queue.length}`;
   $("timer-help").textContent =
-    `Sprich das deutsche Wort. Die Aufnahme endet nach ${TEST_RECORDING_LIMIT_MS / 1000} Sekunden.`;
+    `Lazao amin'ny teny alemà. Mifarana afaka ${TEST_RECORDING_LIMIT_MS / 1000} segondra.`;
 
   $("record-button").classList.add("hidden");
   $("stop-button").classList.remove("hidden");
   $("stop-button").disabled = false;
-  showMessage("Testaufnahme läuft …");
+  showMessage("Mandeha ny fandraisam-peo …");
 
   logEvent("recording_started", item, {
     mode: "test",
@@ -1086,7 +1089,7 @@ function startCountdownTimer() {
 
 async function startTestRecording() {
   if (!currentApiKey) {
-    showMessage("Bitte abmelden und erneut anmelden.", true);
+    showMessage("Mivoaha azafady dia midira indray.", true);
     return;
   }
   if (!testRunState?.active || isBusy || mediaRecorder) return;
@@ -1094,12 +1097,9 @@ async function startTestRecording() {
   const item = currentItem();
   if (!item) return;
 
-  $("evaluation-panel").classList.add("hidden");
-  $("evaluation-result").replaceChildren();
-
   try {
     setBusy(true);
-    showMessage("Mikrofon wird vorbereitet …");
+    showMessage("Manomana ny mikrô …");
     const stream = await requestAudioStream();
     configureRecorder(stream, "test", item);
     mediaRecorder.addEventListener("start", () => onTestRecorderStarted(item), { once: true });
@@ -1109,7 +1109,7 @@ async function startTestRecording() {
     stopMediaTracks();
     resetRecordingUi();
     setBusy(false);
-    showMessage(error.message || "Testaufnahme konnte nicht gestartet werden.", true);
+    showMessage(error.message || "Tsy afaka nanomboka ny fandraisam-peo.", true);
   }
 }
 
@@ -1150,14 +1150,14 @@ function resetRecordingUi() {
     $("play-audio-button").classList.add("hidden");
     $("repeat-button").classList.add("hidden");
     $("skip-button").classList.add("hidden");
-    $("record-button").textContent = "Testantwort aufnehmen";
+    $("record-button").textContent = "Handray feo (Fitsapana)";
   } else {
     $("word-check-button").classList.remove("hidden");
     $("reveal-button").classList.remove("hidden");
     $("play-audio-button").classList.remove("hidden");
     $("repeat-button").classList.remove("hidden");
     $("skip-button").classList.remove("hidden");
-    $("record-button").textContent = "Aufnahme mit Bewertung";
+    $("record-button").textContent = "Handray feo sy hanombana";
   }
 
   $("timer-panel").classList.add("hidden");
@@ -1165,8 +1165,8 @@ function resetRecordingUi() {
 
 async function finishRecording() {
   clearRecordingTimers();
-  showMessage("Aufnahme beendet. Audio wird vorbereitet …");
-  showAnalysisLoading("Aufnahme beendet. Audio wird vorbereitet …");
+  showMessage("");
+  showAnalysisLoading("Tapitra ny fandraisam-peo. Manomana ny feo …");
   stopMediaTracks();
 
   const mode = recordingMode;
@@ -1206,9 +1206,9 @@ async function finishRecording() {
   recordingStartedMonotonic = null;
 
   if (mode === "word_check" || mode === "test") {
-    $("timer-label").textContent = "Aufnahme beendet";
+    $("timer-label").textContent = "Tapitra ny fandraisam-peo";
     $("timer-countdown").textContent = (durationMs / 1000).toFixed(1);
-    $("timer-help").textContent = "Die Antwort wird jetzt bewertet.";
+    $("timer-help").textContent = "Eo am-panombanana ny valinteny.";
   }
 
   if (!sourceBlob.size) {
@@ -1218,14 +1218,12 @@ async function finishRecording() {
     updateWordCheckButton();
 
     if (mode === "test") {
-      const msg = "Es wurden keine Audiodaten aufgenommen. " +
-        "Der Test wurde ohne Auszahlung abgebrochen.";
+      const msg = "Tsy nisy feo voaray. Najanona ny fitsapana.";
       await abandonLessonTest(msg);
-      showAnalysisNotice("Test abgebrochen", msg, true);
+      showAnalysisNotice("Najanona ny fitsapana", msg, true);
     } else {
-      const msg = "Keine Audiodaten aufgenommen. Bitte erneut versuchen.";
-      showMessage(msg, true);
-      showAnalysisNotice("Keine Audiodaten", msg, true);
+      const msg = "Tsy nisy feo voaray. Andramo indray azafady.";
+      showAnalysisNotice("Tsy nisy feo", msg, true);
     }
     return;
   }
@@ -1251,7 +1249,7 @@ async function finishRecording() {
 async function startLessonTest() {
   if (isBusy || wordCheckArmed || testRunState?.active) return;
   if (!currentApiKey) {
-    showMessage("Bitte abmelden und erneut anmelden.", true);
+    showMessage("Mivoaha azafady dia midira indray.", true);
     return;
   }
 
@@ -1260,6 +1258,7 @@ async function startLessonTest() {
 
   if (
     testEligibility.loadFailed ||
+    testEligibility.maxScoreReached ||
     testEligibility.starts >= MAX_TEST_STARTS ||
     getPassedWordCheckCount() < getRequiredWordsForTest()
   ) {
@@ -1268,26 +1267,23 @@ async function startLessonTest() {
   }
 
   if (!items.length || items.some(item => item.max_reward_eur == null)) {
-    showMessage(
-      "Test konnte nicht gestartet werden. Wortbeträge fehlen; prüfe learn_learner_items.",
-      true
-    );
+    showMessage("Tsy afaka nanomboka ny fitsapana (tsy ampy ny angona).", true);
     return;
   }
 
   if (testEligibility.completed) {
     const prevAriary = formatAriary(testEligibility.latestCompletedAriary);
     const confirmed = window.confirm(
-      `Du hast bereits ein gültiges Testergebnis (${prevAriary}). ` +
-      "Wenn du den neuen Durchgang vollständig abschließt, ersetzt er " +
-      "das bisherige Ergebnis – auch wenn der Betrag niedriger ist. " +
-      "Bei Abbruch bleibt dein bisheriges Ergebnis bestehen. Neuen Durchlauf starten?"
+      `Efa manana vokatra ianao (${prevAriary}). ` +
+      "Raha vitanao ny fitsapana vaovao dia hisolo ny vokatra teo aloha izany, " +
+      "na dia kely kokoa aza ny vola azo. Raha ajanona eny an-tenantenany dia mijanona ny teo aloha. " +
+      "Hanomboka fitsapana vaovao ve?"
     );
     if (!confirmed) return;
   }
 
   setBusy(true);
-  showMessage("Lektionstest wird gestartet …");
+  showMessage("Manomboka ny fitsapana …");
 
   const { data, error } = await supabaseClient
     .from("learn_test_runs")
@@ -1298,7 +1294,7 @@ async function startLessonTest() {
   if (error) {
     console.error("Could not start test:", error);
     setBusy(false);
-    showMessage("Test konnte nicht gestartet werden: " + error.message, true);
+    showMessage("Tsy afaka nanomboka ny fitsapana.", true);
     return;
   }
 
@@ -1327,9 +1323,7 @@ async function startLessonTest() {
   renderEarnedAriary();
   renderItem();
   renderTestControls();
-  showMessage(
-    "Der Test läuft. Tippe auf „Testantwort aufnehmen“, um das angezeigte Wort zu beantworten."
-  );
+  showMessage("Mandeha ny fitsapana. Tsindrio ny « Handray feo (Fitsapana) ».");
 }
 
 function shuffleItems(source) {
@@ -1378,9 +1372,9 @@ async function advanceLessonTest(score, expectedRunId, wordAriary = null) {
   const numericScore = Number(score);
 
   if (![0, 0.75, 1].includes(numericScore)) {
-    const msg = "Ungültiger Testscore. Der Test wurde ohne Auszahlung abgebrochen.";
+    const msg = "Nisy olana ara-teknika tamin'ny naoty. Najanona ny fitsapana.";
     await abandonLessonTest(msg);
-    showAnalysisNotice("Test abgebrochen", msg, true);
+    showAnalysisNotice("Najanona ny fitsapana", msg, true);
     return;
   }
 
@@ -1397,11 +1391,11 @@ async function advanceLessonTest(score, expectedRunId, wordAriary = null) {
 
   if (run.index < run.queue.length) {
     currentIndex = items.findIndex(item => item.id === run.queue[run.index].id);
-    renderItem({ keepEvaluation: true });
+    renderItem({ keepMessage: true });
     renderTestControls();
     showMessage(
-      `Antwort gespeichert (+${formatAriary(earned)}). ${run.index} von ${run.queue.length} ` +
-      `Wörtern bearbeitet. Vorläufig: ${formatAriary(run.ariary)}`
+      `Voatahiry (+${formatAriary(earned)}). ${run.index} amin'ny ${run.queue.length} vita. ` +
+      `Vola vonjimaika: ${formatAriary(run.ariary)}`
     );
     return;
   }
@@ -1418,9 +1412,9 @@ async function advanceLessonTest(score, expectedRunId, wordAriary = null) {
 
   if (error) {
     console.error("Could not complete test:", error);
-    const msg = "Der Test konnte nicht sicher gespeichert werden. Es wurde kein Betrag gutgeschrieben.";
+    const msg = "Tsy voatahiry tsara ny fitsapana. Najanona ny fitsapana.";
     await abandonLessonTest(msg);
-    showAnalysisNotice("Speichern fehlgeschlagen", msg, true);
+    showAnalysisNotice("Tsy voatahiry", msg, true);
     return;
   }
 
@@ -1442,22 +1436,17 @@ async function advanceLessonTest(score, expectedRunId, wordAriary = null) {
   testRunState = null;
   renderEarnedAriary();
   await loadTestEligibility(lessonId);
-  renderItem({ keepEvaluation: true });
+  renderItem({ keepMessage: true });
 
-  const summaryText =
-    `Lektionstest abgeschlossen! Endscore: ${finalScore.toFixed(2)} · ` +
-    `Gesamt für diese Lektion: ${formatAriary(finalAriary)}`;
-
-  for (const container of [$("evaluation-result"), $("analysis-modal-result")]) {
-    const finishLine = document.createElement("div");
-    finishLine.className = "ariary-earned-line";
-    finishLine.textContent = summaryText;
-    container.appendChild(finishLine);
-  }
+  const finishLine = document.createElement("div");
+  finishLine.className = "ariary-earned-line";
+  finishLine.textContent =
+    `Vita ny fitsapana! Isa farany: ${finalScore.toFixed(2)} · ` +
+    `Vola azo: ${formatAriary(finalAriary)}`;
+  $("analysis-modal-result").appendChild(finishLine);
 
   showMessage(
-    `Lektionstest abgeschlossen. Endscore: ${finalScore.toFixed(2)}. ` +
-    `Verdient: ${formatAriary(finalAriary)}.`
+    `Vita ny fitsapana. Isa: ${finalScore.toFixed(2)} · Vola azo: ${formatAriary(finalAriary)}.`
   );
 }
 
@@ -1465,8 +1454,7 @@ async function evaluateRecording({
   item, sourceBlob, mode, testRunId, startedAt, promptTime, durationMs, timeLimitMs, endReason
 }) {
   setBusy(true);
-  showMessage("Audio wird vorbereitet …");
-  showAnalysisLoading("Audio wird vorbereitet …");
+  showAnalysisLoading("Manomana ny feo …");
 
   const attemptId = crypto.randomUUID();
   let originalWavBlob;
@@ -1482,17 +1470,14 @@ async function evaluateRecording({
     setBusy(false);
 
     if (mode === "test") {
-      const msg = "Technisches Problem bei der Audioverarbeitung. " +
-        "Der Test wurde ohne Auszahlung abgebrochen.";
+      const msg = "Nisy olana ara-teknika tamin'ny feo. Najanona ny fitsapana.";
       await abandonLessonTest(msg);
-      showAnalysisNotice("Test abgebrochen", msg, true);
+      showAnalysisNotice("Najanona ny fitsapana", msg, true);
       return;
     }
 
     updateWordCheckButton();
-    const msg = `Audio konnte nicht verarbeitet werden: ${error.message || error}`;
-    showMessage(msg, true);
-    showAnalysisNotice("Audiofehler", msg, true);
+    showAnalysisNotice("Olana ara-teknika", "Tsy voakarakara ny feo.", true);
     return;
   }
 
@@ -1503,16 +1488,13 @@ async function evaluateRecording({
     console.error("Could not get attempt number:", error);
     wordCheckArmed = false;
     if (mode === "test") {
-      const msg = "Testversuch konnte nicht gespeichert werden. " +
-        "Der Test wurde ohne Auszahlung abgebrochen.";
+      const msg = "Tsy voatahiry ny andrana. Najanona ny fitsapana.";
       await abandonLessonTest(msg);
-      showAnalysisNotice("Test abgebrochen", msg, true);
+      showAnalysisNotice("Najanona ny fitsapana", msg, true);
     } else {
       resetRecordingUi();
       setBusy(false);
-      const msg = "Versuchsnummer konnte nicht geladen werden.";
-      showMessage(msg, true);
-      showAnalysisNotice("Speicherfehler", msg, true);
+      showAnalysisNotice("Olana ara-teknika", "Tsy voatahiry ny andrana.", true);
     }
     return;
   }
@@ -1532,10 +1514,9 @@ async function evaluateRecording({
 
     if (mode === "test") {
       if (!saveResult.ok) {
-        const msg = "Die Testantwort konnte nicht gespeichert werden. " +
-          "Der Test wurde ohne Auszahlung abgebrochen.";
+        const msg = "Tsy voatahiry ny valinteny. Najanona ny fitsapana.";
         await abandonLessonTest(msg);
-        showAnalysisNotice("Test abgebrochen", msg, true);
+        showAnalysisNotice("Najanona ny fitsapana", msg, true);
         return;
       }
 
@@ -1544,21 +1525,22 @@ async function evaluateRecording({
         recognized: false,
         finalScore: 0,
         wordAriary: 0,
-        errors: ["Keine verständliche Sprache erkannt."],
+        hasError: false,
         mode
       });
       await advanceLessonTest(0, testRunId, 0);
       return;
     }
 
-    const msg = "Keine Sprache erkannt. Bitte sprich etwas lauter und versuche es erneut.";
-    showMessage(msg, true);
-    showAnalysisNotice("Keine Sprache erkannt", msg, true);
+    showAnalysisNotice(
+      "Tsy nisy feo re",
+      "Mitenena mafimafy kokoa azafady dia andramo indray.",
+      true
+    );
     return;
   }
 
-  showMessage("Antwort wird bewertet …");
-  showAnalysisLoading("Antwort wird bewertet … Dies kann einige Sekunden dauern.");
+  showAnalysisLoading("Eo am-panombanana ny valinteny … Mety haharitra segondra vitsy izany.");
 
   const [uploadResult, pronunciationResult] = await Promise.allSettled([
     uploadRecording(audioPath, originalWavBlob),
@@ -1651,21 +1633,28 @@ async function evaluateRecording({
       ? getWordEarnedAriary(testRunState.queue.length, finalScore)
       : null;
 
-    showEvaluation({ pronunciation, recognized, finalScore, wordAriary, errors, mode });
+    const hasTechnicalError =
+      Boolean(attemptInsertError) ||
+      !pronunciationSucceeded ||
+      !uploadSucceeded ||
+      evaluationStatus !== "complete" ||
+      finalScore === null;
+
+    showEvaluation({
+      pronunciation,
+      recognized,
+      finalScore,
+      wordAriary,
+      hasError: hasTechnicalError,
+      mode
+    });
 
     wordCheckArmed = false;
     resetRecordingUi();
     setBusy(false);
 
-    if (
-      attemptInsertError ||
-      !pronunciationSucceeded ||
-      !uploadSucceeded ||
-      evaluationStatus !== "complete" ||
-      finalScore === null
-    ) {
-      const msg = "Technisches Problem bei der Testbewertung oder Speicherung. " +
-        "Der Test wurde ohne Auszahlung abgebrochen.";
+    if (hasTechnicalError) {
+      const msg = "Nisy olana ara-teknika. Najanona ny fitsapana.";
       await abandonLessonTest(msg);
       const errNote = document.createElement("div");
       errNote.className = "evaluation-line";
@@ -1681,27 +1670,16 @@ async function evaluateRecording({
 
   wordCheckArmed = false;
   await loadLearnerProgress();
-  showEvaluation({ pronunciation, recognized, finalScore, errors, mode });
+  showEvaluation({
+    pronunciation,
+    recognized,
+    finalScore,
+    hasError: errors.length > 0,
+    mode
+  });
   resetRecordingUi();
   setBusy(false);
   updateWordCheckButton();
-
-  if (errors.length) {
-    showMessage(
-      "Technisches Problem bei der Bewertung. Es wurde kein bestandenes Ergebnis gespeichert.",
-      true
-    );
-  } else if (mode === "word_check" && finalScore === 1) {
-    showMessage("Wort-Check bestanden: Score 1,0.", false);
-  } else if (mode === "word_check" && finalScore === 0.75) {
-    showMessage(
-      "Wort erkannt, Aussprache noch nicht vollständig akzeptiert. Übe weiter und versuche es erneut."
-    );
-  } else if (mode === "word_check") {
-    showMessage("Wort-Check nicht bestanden. Übe das Wort und versuche es erneut.");
-  } else {
-    showMessage("Bewertung abgeschlossen.", false);
-  }
 }
 
 async function saveNoSpeechAttempt({
@@ -1748,7 +1726,7 @@ async function saveNoSpeechAttempt({
 
 async function convertBlobToWav(blob) {
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-  if (!AudioContextClass) throw new Error("Web Audio API ist nicht verfügbar.");
+  if (!AudioContextClass) throw new Error("Tsy misy Web Audio API.");
 
   const context = new AudioContextClass();
   try {
@@ -1776,7 +1754,7 @@ async function convertBlobToWav(blob) {
 
 async function trimSilenceFromWav(wavBlob) {
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-  if (!AudioContextClass) throw new Error("Web Audio API ist nicht verfügbar.");
+  if (!AudioContextClass) throw new Error("Tsy misy Web Audio API.");
 
   const context = new AudioContextClass();
   try {
@@ -1940,8 +1918,7 @@ async function requestPronunciationModel({ apiKey, item, base64Audio, model }) {
 
   const jsonMatch = content.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
-    const notice = data.x_nanogpt_notice ? ` NanoGPT-Hinweis: ${data.x_nanogpt_notice}` : "";
-    throw new Error(`Kein JSON in Antwort von ${model}: ${content.slice(0, 500)}.${notice}`);
+    throw new Error(`Kein JSON in Antwort von ${model}: ${content.slice(0, 500)}`);
   }
 
   let result;
@@ -1972,8 +1949,7 @@ async function requestPronunciationModel({ apiKey, item, base64Audio, model }) {
     match: result.pronunciation_match,
     requestId,
     cost,
-    usage: data.usage || null,
-    notice: data.x_nanogpt_notice || null
+    usage: data.usage || null
   };
 }
 
@@ -1989,7 +1965,6 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
       `Primary model ${PRONUNCIATION_MODEL} failed, falling back to ${PRONUNCIATION_FALLBACK_MODEL}:`,
       primaryError
     );
-    showAnalysisLoading("Carbon nicht verfügbar – wechsle auf Fallback-Modell (Hydrogen) …");
 
     try {
       const fallbackResult = await requestPronunciationModel({
@@ -1997,12 +1972,11 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
       });
       return {
         ...fallbackResult,
-        fallbackFrom: PRONUNCIATION_MODEL,
-        primaryError: errorText(primaryError)
+        fallbackFrom: PRONUNCIATION_MODEL
       };
     } catch (fallbackError) {
       throw new Error(
-        `Carbon: ${errorText(primaryError)} | Hydrogen-Fallback: ${errorText(fallbackError)}`
+        `Carbon: ${errorText(primaryError)} | Hydrogen: ${errorText(fallbackError)}`
       );
     }
   }
@@ -2020,7 +1994,7 @@ async function blobToBase64(blob) {
 }
 
 function buildEvaluationNodes({
-  pronunciation, recognized, finalScore, wordAriary = null, errors = [], mode
+  pronunciation, recognized, finalScore, wordAriary = null, hasError = false, mode
 }) {
   const fragment = document.createDocumentFragment();
   const addLine = (text, className = "evaluation-line") => {
@@ -2031,90 +2005,69 @@ function buildEvaluationNodes({
   };
 
   if (pronunciation) {
-    const label = pronunciation.model === PRONUNCIATION_FALLBACK_MODEL
-      ? "Hydrogen (Fallback)"
-      : "Carbon";
-
     addLine(
-      `${label}-Transkript: "${pronunciation.heardText || "(leer)"}" — ` +
-      (recognized ? "Zielwort erkannt" : "Zielwort nicht exakt erkannt")
+      `Feo re: "${pronunciation.heardText || "(tsy misy)"}" — ` +
+      (recognized ? "Voaray tsara ny teny" : "Tsy voaray tsara ny teny")
     );
     addLine(
-      `${label}-Aussprache: ` +
-      (pronunciation.match ? "Aussprache akzeptiert" : "Aussprache nicht akzeptiert")
+      "Fanononana: " +
+      (pronunciation.match ? "Ekena" : "Mbola mila fanatsarana")
     );
-    if (pronunciation.ipa) addLine(`Erkannte Lautfolge: ${pronunciation.ipa}`);
-    if (pronunciation.fallbackFrom) {
-      addLine(`Hinweis: Fallback von ${pronunciation.fallbackFrom} auf ${pronunciation.model}.`);
+    if (pronunciation.ipa) {
+      addLine(`Feo heno (IPA): ${pronunciation.ipa}`);
     }
-    if (pronunciation.usage) {
-      addLine(
-        `Tokens: ${pronunciation.usage.prompt_tokens ?? "—"} Input / ` +
-        `${pronunciation.usage.completion_tokens ?? "—"} Output`
-      );
-    }
-    if (pronunciation.cost !== null) {
-      addLine(`Modellkosten: ${Number(pronunciation.cost).toFixed(6)} USD`);
-    }
-    if (pronunciation.notice) addLine(`NanoGPT-Hinweis: ${pronunciation.notice}`);
-  } else {
-    addLine("Keine verwertbare Bewertung.");
+  } else if (!hasError) {
+    addLine("Tsy nisy feo re.");
   }
 
   if (finalScore !== null) {
-    addLine(`Score: ${finalScore}`, "score");
-  } else {
-    addLine("Kein Score: technische Bewertung unvollständig.");
+    addLine(`Isa: ${finalScore}`, "score");
   }
 
-  if (mode === "word_check") {
+  if (mode === "word_check" && finalScore !== null) {
     addLine(
       finalScore === 1
-        ? "Wort-Check bestanden."
-        : "Wort-Check nicht bestanden; du kannst weiter üben."
+        ? "Afaka tamin'ny fitsapana teny."
+        : "Tsy mbola afaka; tohizo ny fanazaran-tena."
     );
   }
 
-  if (mode === "test") {
+  if (mode === "test" && finalScore !== null) {
     if (wordAriary !== null && wordAriary > 0) {
-      addLine(`Dieses Wort: +${formatAriary(wordAriary)}`, "ariary-earned-line");
-    } else if (finalScore !== null) {
-      addLine("Dieses Wort: +0 Ariary");
+      addLine(`Ity teny ity: +${formatAriary(wordAriary)}`, "ariary-earned-line");
+    } else {
+      addLine("Ity teny ity: +0 Ariary");
     }
   }
 
-  if (errors.length) addLine(`Technische Hinweise: ${errors.join(" | ")}`);
   return fragment;
 }
 
 function showEvaluation(params) {
-  const result = $("evaluation-result");
-  result.replaceChildren(buildEvaluationNodes(params));
-  $("evaluation-panel").classList.remove("hidden");
-
-  const modal = $("analysis-modal");
-  modal.classList.remove("hidden");
+  $("analysis-modal").classList.remove("hidden");
   $("analysis-spinner").classList.add("hidden");
 
   let title = "Valin'ny fanombanana";
-  let statusText = "Bewertung abgeschlossen.";
+  let statusText = "Vita ny fanombanana.";
   let isError = false;
 
-  if (params.errors?.length) {
-    title = "Hinweis zur Bewertung";
-    statusText = "Es ist ein technisches Problem aufgetreten.";
+  if (params.hasError) {
+    title = "Olana ara-teknika";
+    statusText = "Nisy olana teo am-panombanana. Andramo indray azafady.";
     isError = true;
   } else if (params.mode === "word_check") {
-    title = params.finalScore === 1 ? "Wort-Check bestanden" : "Wort-Check nicht bestanden";
+    title = params.finalScore === 1
+      ? "Afaka tamin'ny fitsapana teny"
+      : "Tsy mbola afaka";
     statusText = params.finalScore === 1
-      ? "Sehr gut! Dieses Wort zählt als getestet."
-      : "Übe das Wort noch etwas und versuche es erneut.";
+      ? "Tsara! Voasedra ity teny ity."
+      : "Mianara kely indray dia andramo indray.";
     isError = params.finalScore !== 1;
   } else if (params.mode === "test") {
-    title = params.finalScore > 0 ? "Testantwort akzeptiert" : "Testantwort nicht erkannt";
+    title = params.finalScore > 0 ? "Ekena ny valinteny" : "Tsy voaray ny valinteny";
     statusText = params.wordAriary > 0
-      ? `Verdient: +${formatAriary(params.wordAriary)}`
-      : "Für dieses Wort gibt es 0 Ariary.";
+      ? `Vola azo: +${formatAriary(params.wordAriary)}`
+      : "0 Ariary ho an'ity teny ity.";
     isError = params.finalScore === 0;
   }
 
@@ -2126,22 +2079,71 @@ function showEvaluation(params) {
 }
 
 function errorText(error) {
-  if (!error) return "Unbekannter Fehler";
+  if (!error) return "Olana tsy fantatra";
   return error.message || String(error);
 }
 
+async function resetAllTestsByAdmin() {
+  if (isBusy || mediaRecorder) return;
+
+  setBusy(true);
+  showMessage("Averina amin'ny voalohany ny fitsapana …");
+  const { error } = await supabaseClient.rpc("reset_my_tests");
+
+  if (error) {
+    console.error("Could not reset tests:", error);
+    setBusy(false);
+    showMessage("Tsy nahomby ny famerenana.", true);
+    return;
+  }
+
+  testRunState = null;
+  wordCheckArmed = false;
+
+  const lessonId = $("lesson-select").value;
+  await loadTotalEarnedAriary();
+  await loadLearnerProgress();
+  await loadTestEligibility(lessonId);
+
+  setBusy(false);
+  renderItem({ keepMessage: true });
+  showMessage("Voafafa ny fitsapana rehetra voatahiry.", false);
+}
+
+const ADMIN_ACTIONS = {
+  "zurück123": resetAllTestsByAdmin
+};
+
 $("analysis-modal-close").addEventListener("click", hideAnalysisModal);
+
+$("admin-code-form")?.addEventListener("submit", async event => {
+  event.preventDefault();
+  if (isBusy || mediaRecorder) return;
+
+  const input = $("admin-code-input");
+  const code = input.value.trim();
+  input.value = "";
+  if (!code) return;
+
+  const action = ADMIN_ACTIONS[code];
+  if (!action) {
+    showMessage("Diso ny kaody mpitantana.", true);
+    return;
+  }
+
+  await action();
+});
 
 $("login-form").addEventListener("submit", async event => {
   event.preventDefault();
-  $("login-message").textContent = "Anmeldung wird geprüft …";
+  $("login-message").textContent = "Manamarina ny fidirana …";
   currentApiKey = null;
 
   let parsed;
   try {
     parsed = parseLoginString($("access-code").value);
   } catch (error) {
-    $("login-message").textContent = error.message || "Ungültiger Login-String.";
+    $("login-message").textContent = error.message || "Diso ny kaody fidirana.";
     return;
   }
 
@@ -2166,7 +2168,7 @@ $("login-form").addEventListener("submit", async event => {
     currentApiKey = null;
     await supabaseClient.auth.signOut();
     $("login-message").textContent =
-      profileError.message || "Profil konnte nicht geladen werden.";
+      profileError.message || "Tsy voaray ny kaonty.";
   }
 });
 
@@ -2196,11 +2198,11 @@ $("test-start-button").addEventListener("click", startLessonTest);
 $("test-abandon-button").addEventListener("click", async () => {
   if (!testRunState?.active || isBusy || mediaRecorder) return;
   const confirmed = window.confirm(
-    "Test abbrechen? Die vorläufige Summe dieses Durchgangs wird verworfen; " +
-    "ein früheres gültiges Ergebnis bleibt erhalten."
+    "Hajanona ve ny fitsapana? Ho foana ny vola vonjimaika tamin'ity andrana ity, " +
+    "fa mijanona kosa ny vokatra manankery teo aloha."
   );
   if (confirmed) {
-    await abandonLessonTest("Test abgebrochen. Die vorläufige Summe wurde verworfen.");
+    await abandonLessonTest("Najanona ny fitsapana. Foana ny vola vonjimaika.");
   }
 });
 
@@ -2217,42 +2219,6 @@ $("skip-button").addEventListener("click", async () => {
   if (item) await logEvent("item_skipped", item, { index: currentIndex });
   currentIndex = (currentIndex + 1) % items.length;
   renderItem();
-});
-
-// TEMPORÄR: Reset-Button für die Testphase; später entfernen
-$("reset-tests-button")?.addEventListener("click", async () => {
-  if (isBusy || mediaRecorder) return;
-  const confirmed = window.confirm(
-    "Alle gespeicherten Endtests und Wort-Checks zurücksetzen?"
-  );
-  if (!confirmed) return;
-
-  setBusy(true);
-  showMessage("Gespeicherte Tests werden zurückgesetzt …");
-  const { error } = await supabaseClient.rpc("reset_my_tests");
-
-  if (error) {
-    console.error("Could not reset tests:", error);
-    setBusy(false);
-    showMessage(
-      "Zurücksetzen fehlgeschlagen (wurde das SQL für reset_my_tests ausgeführt?): " +
-      error.message,
-      true
-    );
-    return;
-  }
-
-  testRunState = null;
-  wordCheckArmed = false;
-
-  const lessonId = $("lesson-select").value;
-  await loadTotalEarnedAriary();
-  await loadLearnerProgress();
-  await loadTestEligibility(lessonId);
-
-  setBusy(false);
-  renderItem();
-  showMessage("Alle Endtests und Wort-Checks wurden zurückgesetzt.", false);
 });
 
 $("logout-button").addEventListener("click", async () => {
