@@ -247,7 +247,7 @@ summary:focus-visible {
   color: #53616f;
   font-size: 1.15rem;
   font-weight: 650;
-  content: "Bereit für das nächste Wort";
+  content: "Vonona amin'ny teny manaraka";
 }
 
 #app-screen:has(#test-abandon-button:not(.hidden))
@@ -284,7 +284,7 @@ summary:focus-visible {
   color: #53616f;
   font-size: 1.15rem;
   font-weight: 650;
-  content: "Bereit für den Wort-Check";
+  content: "Vonona amin'ny fitsapana teny";
 }
 
 #app-screen.word-check-armed:has(#timer-panel:not(.hidden)) #prompt {
@@ -348,14 +348,6 @@ audio {
   color: #a12626;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.evaluation-panel {
-  margin-top: 18px;
-  padding: 14px;
-  background: #f8f9fa;
-  border: 1px solid #d9e0e6;
-  border-radius: 10px;
 }
 
 .evaluation-line {
@@ -424,10 +416,26 @@ audio {
   }
 }
 
-.dev-reset-box {
+.admin-code-box {
   margin-top: 16px;
-  padding-top: 14px;
+  padding-top: 12px;
   border-top: 1px dashed #d9e0e6;
+}
+
+.admin-code-box label {
+  margin: 0 0 6px;
+}
+
+.admin-code-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.admin-code-row input {
+  min-height: 42px;
+  padding: 8px 12px;
 }
 
 .hidden {
