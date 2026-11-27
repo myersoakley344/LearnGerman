@@ -853,7 +853,8 @@
       test_started: "Test gestartet",
       test_abandoned: "Test abgebrochen",
       test_completed: "Test abgeschlossen",
-      payout_calculated: "Gutschrift berechnet"
+      payout_calculated: "Gutschrift berechnet",
+      pronunciation_feedback_shown: "Aussprachehinweis angezeigt"
     };
 
     return titles[event.event_type] || event.event_type;
@@ -957,6 +958,11 @@
     if (usefulPayload.lessonId) {
       addText(body, "entry-line muted", `Lektion-ID: ${usefulPayload.lessonId}`);
       delete usefulPayload.lessonId;
+    }
+
+    if (usefulPayload.feedback) {
+      addText(body, "entry-line", `Hinweis: ${usefulPayload.feedback}`);
+      delete usefulPayload.feedback;
     }
 
     addDetails(body, "Zusätzliche Ereignisdaten", usefulPayload);
