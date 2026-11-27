@@ -7,6 +7,7 @@ const NANO_API_BASE = "https://api.nano-gpt.com/api/v1";
 const PRONUNCIATION_ENDPOINT = `${NANO_API_BASE}/chat/completions`;
 const PRONUNCIATION_MODEL = "google/gemini-4-carbon";
 const PRONUNCIATION_FALLBACK_MODEL = "google/gemini-4-hydrogen";
+const FEEDBACK_MODEL = "openai/gpt-6-luna";
 
 const RECORDING_BUCKET = "learn-recordings";
 const TTS_BUCKET = "learn-tts";
@@ -1605,11 +1606,36 @@ async function evaluateRecording({
       "; reasoning_effort=low; max_tokens=1024; edge-trim=v1"
   };
 
-  const { data: attemptData, error: attemptInsertError } = await supabaseClient
+  const shouldFetchFeedback =
+    pronunciationSucceeded &&
+    finalScore !== null &&
+    finalScore < 1 &&
+    Boolean(pronunciation?.ipa || pronunciation?.heardText) &&
+    !(mode === "test" && !uploadSucceeded);
+
+  if (shouldFetchFeedback) {
+    showAnalysisLoading("Manomana ny torohevitra fanatsarana …");
+  }
+
+  const attemptInsertPromise = supabaseClient
     .from("learn_attempts")
     .insert(attemptRow)
     .select("id")
     .single();
+
+  const feedbackPromise = shouldFetchFeedback
+    ? callPronunciationFeedback({
+        apiKey: currentApiKey,
+        item,
+        pronunciation
+      }).then(
+        value => ({ ok: true, value }),
+        error => ({ ok: false, error })
+      )
+    : Promise.resolve(null);
+
+  const [{ data: attemptData, error: attemptInsertError }, feedbackOutcome] =
+    await Promise.all([attemptInsertPromise, feedbackPromise]);
 
   if (attemptInsertError) {
     console.error("Could not save attempt:", attemptInsertError);
@@ -1627,6 +1653,37 @@ async function evaluateRecording({
     usage: pronunciation?.usage ?? null,
     audioDurationMs: trimmedAudio.trimmedDurationMs
   });
+
+  let feedbackText = null;
+  if (feedbackOutcome) {
+    if (feedbackOutcome.ok) {
+      feedbackText = feedbackOutcome.value.text;
+    } else {
+      console.warn("Pronunciation feedback failed:", feedbackOutcome.error);
+    }
+
+    await logApiUsage({
+      requestId: feedbackOutcome.ok ? feedbackOutcome.value.requestId : null,
+      attemptId: attemptData?.id || null,
+      itemId: item.id,
+      operation: "pronunciation_feedback",
+      model: FEEDBACK_MODEL,
+      status: feedbackOutcome.ok ? "success" : "error",
+      cost: feedbackOutcome.ok ? feedbackOutcome.value.cost : null,
+      usage: feedbackOutcome.ok ? feedbackOutcome.value.usage : null,
+      audioDurationMs: null
+    });
+
+    if (feedbackText) {
+      await logEvent("pronunciation_feedback_shown", item, {
+        mode,
+        attemptId: attemptData?.id || null,
+        model: FEEDBACK_MODEL,
+        feedback: feedbackText,
+        ...(testRunId ? { testRunId } : {})
+      });
+    }
+  }
 
   if (mode === "test") {
     const wordAriary = finalScore !== null && testRunState?.active
@@ -1646,7 +1703,8 @@ async function evaluateRecording({
       finalScore,
       wordAriary,
       hasError: hasTechnicalError,
-      mode
+      mode,
+      feedbackText
     });
 
     wordCheckArmed = false;
@@ -1675,7 +1733,8 @@ async function evaluateRecording({
     recognized,
     finalScore,
     hasError: errors.length > 0,
-    mode
+    mode,
+    feedbackText
   });
   resetRecordingUi();
   setBusy(false);
@@ -1982,6 +2041,83 @@ async function callPronunciationModel({ apiKey, item, wavBlob }) {
   }
 }
 
+async function callPronunciationFeedback({ apiKey, item, pronunciation }) {
+  const prompt =
+    "Ein Muttersprachler in Malagasy lernt mit einer App Deutsch. " +
+    "Die App hat ein automatisches Bewertungssystem für die Aussprache. " +
+    `Der Lerner hat versucht, das deutsche Wort bzw. den Satz "${item.target_de}" auszusprechen. ` +
+    `Die App hat die Lautfolge "${pronunciation.ipa || "(nicht erkannt)"}" ` +
+    (pronunciation.heardText
+      ? `(erkanntes Wort: "${pronunciation.heardText}") `
+      : "") +
+    "erkannt und als nicht richtig bewertet. " +
+    "Wir möchten dem Lerner eine kurze Nachricht anzeigen, welche Art von Fehler er gemacht hat " +
+    "und wie er sich verbessern kann. " +
+    "Generiere einen kurzen Hinweistext (maximal 2 bis 3 kurze Sätze) auf Malagasy, " +
+    "in dem du beschreibst, wo die Aussprache von der korrekten Aussprache abgewichen ist " +
+    "und wie sie verbessert werden kann. " +
+    "Bedenke dabei, dass der Lerner nur Malagasy kann und nicht mit dem Lautfolgealphabet (IPA) vertraut ist; " +
+    "verwende daher keine IPA-Zeichen in deiner Antwort. " +
+    "Falls der Lerner etwas ganz anderes (z. B. ein ganz anderes Wort) gesprochen hat, " +
+    "genügt ein kurzer Hinweis auf Malagasy, dass nicht das richtige Wort gesprochen wurde. " +
+    "Antworte ausschließlich mit dem fertigen Hinweistext auf Malagasy, ohne Einleitung und ohne Markdown.";
+
+  const response = await fetch(PRONUNCIATION_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "Content-Type": "application/json",
+      "Accept": "application/json"
+    },
+    body: JSON.stringify({
+      model: FEEDBACK_MODEL,
+      stream: false,
+      max_tokens: 1024,
+      messages: [
+        { role: "user", content: prompt }
+      ]
+    })
+  });
+
+  const requestId = response.headers.get("x-request-id");
+  const bodyText = await response.text();
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${bodyText.slice(0, 700)}`);
+  }
+
+  let data;
+  try {
+    data = JSON.parse(bodyText);
+  } catch {
+    throw new Error(`Antwort von ${FEEDBACK_MODEL} war kein JSON: ${bodyText.slice(0, 500)}`);
+  }
+
+  let content = data.choices?.[0]?.message?.content;
+  if (Array.isArray(content)) {
+    content = content
+      .filter(part => typeof part?.text === "string")
+      .map(part => part.text)
+      .join("");
+  }
+  content = String(content || "").trim();
+
+  if (!content) {
+    throw new Error(`Leere Antwort von ${FEEDBACK_MODEL}.`);
+  }
+
+  let cost = costFromHeaders(response.headers);
+  if (cost === null) cost = costFromObject(data);
+  if (cost === null) cost = await lookupNanoCost(apiKey, requestId);
+
+  return {
+    model: FEEDBACK_MODEL,
+    text: content,
+    requestId,
+    cost,
+    usage: data.usage || null
+  };
+}
+
 async function blobToBase64(blob) {
   const buffer = await blob.arrayBuffer();
   const bytes = new Uint8Array(buffer);
@@ -1994,7 +2130,13 @@ async function blobToBase64(blob) {
 }
 
 function buildEvaluationNodes({
-  pronunciation, recognized, finalScore, wordAriary = null, hasError = false, mode
+  pronunciation,
+  recognized,
+  finalScore,
+  wordAriary = null,
+  hasError = false,
+  mode,
+  feedbackText = null
 }) {
   const fragment = document.createDocumentFragment();
   const addLine = (text, className = "evaluation-line") => {
@@ -2038,6 +2180,22 @@ function buildEvaluationNodes({
     } else {
       addLine("Ity teny ity: +0 Ariary");
     }
+  }
+
+  if (feedbackText) {
+    const box = document.createElement("div");
+    box.className = "feedback-box";
+
+    const title = document.createElement("div");
+    title.className = "feedback-title";
+    title.textContent = "Torohevitra fanatsarana";
+
+    const body = document.createElement("div");
+    body.className = "feedback-text";
+    body.textContent = feedbackText;
+
+    box.append(title, body);
+    fragment.appendChild(box);
   }
 
   return fragment;
