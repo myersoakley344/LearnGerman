@@ -111,6 +111,12 @@ summary:focus-visible {
   margin: 4px 0 12px;
 }
 
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .participant-name {
   font-weight: 700;
   overflow-wrap: anywhere;
@@ -132,6 +138,10 @@ summary:focus-visible {
   min-width: 92px;
   min-height: 42px;
   padding: 8px 12px;
+}
+
+.login-help-button {
+  margin-top: 10px;
 }
 
 .muted {
@@ -226,6 +236,11 @@ summary:focus-visible {
   background: #f0f4f7;
   border: 1px solid #d9e0e6;
   border-radius: 12px;
+}
+
+#app-screen:has(#stop-button:not(.hidden)) #help-button {
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 #app-screen:has(#test-abandon-button:not(.hidden)) .progress-box,
@@ -421,6 +436,107 @@ audio {
   margin: 12px 0 16px;
 }
 
+.help-modal-card {
+  max-width: 560px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.help-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid #d9e0e6;
+}
+
+.help-modal-header h2 {
+  margin: 0;
+  font-size: 1.18rem;
+}
+
+.help-close-icon {
+  width: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0;
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.help-content {
+  overflow-y: auto;
+  padding: 16px 20px;
+  line-height: 1.5;
+  font-size: 0.96rem;
+}
+
+.help-content h3 {
+  margin: 20px 0 8px;
+  padding-top: 14px;
+  border-top: 1px solid #e4e9ee;
+  color: #174978;
+  font-size: 1.06rem;
+  line-height: 1.3;
+}
+
+.help-content h3:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.help-content h4 {
+  margin: 14px 0 6px;
+  font-size: 0.97rem;
+  color: #18212b;
+}
+
+.help-content p {
+  margin: 8px 0;
+}
+
+.help-content ul,
+.help-content ol {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.help-content li {
+  margin: 6px 0;
+}
+
+.help-content ul ul,
+.help-content ol ul {
+  margin-top: 4px;
+}
+
+.help-note {
+  margin: 12px 0;
+  padding: 11px 13px;
+  background: #f0f6fc;
+  border: 1px solid #bfd6ec;
+  border-radius: 10px;
+}
+
+.help-warning {
+  margin: 12px 0;
+  padding: 11px 13px;
+  background: #fff6e3;
+  border: 1px solid #ebd198;
+  border-radius: 10px;
+}
+
+.help-modal-footer {
+  padding: 12px 20px 16px;
+  border-top: 1px solid #d9e0e6;
+  background: #fff;
+}
+
 .spinner {
   width: 40px;
   height: 40px;
@@ -474,5 +590,12 @@ audio {
 
   .nav-buttons {
     grid-template-columns: 1fr;
+  }
+
+  .help-modal-header,
+  .help-content,
+  .help-modal-footer {
+    padding-left: 14px;
+    padding-right: 14px;
   }
 }
