@@ -17,6 +17,7 @@ const WORD_CHECK_LIMIT_MS = 2_000;
 const TEST_RECORDING_LIMIT_MS = 4_000;
 const RECORDING_CHUNK_MS = 100;
 const RECORDING_CHUNK_GRACE_MS = 250;
+const RECORDING_AUDIO_BITRATE = 24_000;
 const MAX_TEST_STARTS = 5;
 const LESSON_TARGET_ARIARY = 2500;
 
@@ -863,7 +864,12 @@ async function requestAudioStream() {
 
 function configureRecorder(stream, mode, item) {
   const mimeType = chooseRecorderMimeType();
-  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  const recorderOptions = {
+    audioBitsPerSecond: RECORDING_AUDIO_BITRATE
+  };
+  if (mimeType) recorderOptions.mimeType = mimeType;
+
+  const recorder = new MediaRecorder(stream, recorderOptions);
 
   mediaRecorder = recorder;
   recordingStream = stream;
@@ -1451,6 +1457,17 @@ async function advanceLessonTest(score, expectedRunId, wordAriary = null) {
   );
 }
 
+function getRecordingFileExtension(blob) {
+  const mimeType = (blob.type || "audio/webm")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+
+  if (mimeType === "audio/mp4" || mimeType === "video/mp4") return "m4a";
+  if (mimeType === "audio/ogg" || mimeType === "video/ogg") return "ogg";
+  return "webm";
+}
+
 async function evaluateRecording({
   item, sourceBlob, mode, testRunId, startedAt, promptTime, durationMs, timeLimitMs, endReason
 }) {
@@ -1458,12 +1475,12 @@ async function evaluateRecording({
   showAnalysisLoading("Manomana ny feo …");
 
   const attemptId = crypto.randomUUID();
-  let originalWavBlob;
+  let wavForAnalysis;
   let trimmedAudio;
 
   try {
-    originalWavBlob = await convertBlobToWav(sourceBlob);
-    trimmedAudio = await trimSilenceFromWav(originalWavBlob);
+    wavForAnalysis = await convertBlobToWav(sourceBlob);
+    trimmedAudio = await trimSilenceFromWav(wavForAnalysis);
   } catch (error) {
     console.error("Audio conversion/trim failed:", error);
     wordCheckArmed = false;
@@ -1500,11 +1517,13 @@ async function evaluateRecording({
     return;
   }
 
-  const audioPath = `${currentUser.id}/${item.lesson_id}/${item.id}/${attemptId}.wav`;
+  const extension = getRecordingFileExtension(sourceBlob);
+  const audioPath =
+    `${currentUser.id}/${item.lesson_id}/${item.id}/${attemptId}.${extension}`;
 
   if (!trimmedAudio.hasSpeech) {
     const saveResult = await saveNoSpeechAttempt({
-      item, mode, testRunId, attemptId, attemptNumber, originalWavBlob,
+      item, mode, testRunId, attemptId, attemptNumber, sourceBlob,
       audioPath, startedAt, promptTime, durationMs, timeLimitMs, endReason
     });
 
@@ -1544,7 +1563,7 @@ async function evaluateRecording({
   showAnalysisLoading("Eo am-panombanana ny valinteny … Mety haharitra segondra vitsy izany.");
 
   const [uploadResult, pronunciationResult] = await Promise.allSettled([
-    uploadRecording(audioPath, originalWavBlob),
+    uploadRecording(audioPath, sourceBlob),
     callPronunciationModel({ apiKey: currentApiKey, item, wavBlob: trimmedAudio.blob })
   ]);
 
@@ -1742,12 +1761,12 @@ async function evaluateRecording({
 }
 
 async function saveNoSpeechAttempt({
-  item, mode, testRunId, attemptId, attemptNumber, originalWavBlob,
+  item, mode, testRunId, attemptId, attemptNumber, sourceBlob,
   audioPath, startedAt, promptTime, durationMs, timeLimitMs, endReason
 }) {
   let uploadError = null;
   try {
-    await uploadRecording(audioPath, originalWavBlob);
+    await uploadRecording(audioPath, sourceBlob);
   } catch (error) {
     uploadError = error;
   }
@@ -1898,9 +1917,14 @@ function writeAscii(view, offset, text) {
 }
 
 async function uploadRecording(path, blob) {
+  const contentType = (blob.type || "audio/webm")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+
   const { error } = await supabaseClient.storage
     .from(RECORDING_BUCKET)
-    .upload(path, blob, { contentType: "audio/wav", upsert: false });
+    .upload(path, blob, { contentType, upsert: false });
   if (error) throw error;
   return path;
 }
