@@ -5,7 +5,7 @@ const SUPABASE_KEY = "sb_publishable_D0adyb95if5W2IH5WA9JOQ_ENePqpoh";
 
 const NANO_API_BASE = "https://api.nano-gpt.com/api/v1";
 const PRONUNCIATION_ENDPOINT = `${NANO_API_BASE}/chat/completions`;
-const PRONUNCIATION_MODEL = "google/gemini-4-carbon";
+const PRONUNCIATION_MODEL = "google/gemini-4-argon";
 const PRONUNCIATION_FALLBACK_MODEL = "google/gemini-4-hydrogen";
 const FEEDBACK_MODEL = "openai/gpt-6-luna";
 
