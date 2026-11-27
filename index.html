@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6f8">
   <title>Fianarana teny alemà</title>
-  <link rel="stylesheet" href="./styles.css?v=7">
+  <link rel="stylesheet" href="./styles.css?v=8">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="./config.js" defer></script>
   <script src="./app.js?v=7" defer></script>
@@ -31,6 +31,14 @@
       <button class="primary" type="submit">Hiditra</button>
     </form>
 
+    <button
+      id="login-help-button"
+      class="secondary login-help-button help-trigger"
+      type="button"
+    >
+      Torolalana fampiasana
+    </button>
+
     <div id="login-message" class="message" role="status"></div>
   </section>
 
@@ -45,9 +53,18 @@
         Vola azo: 0 Ariary
       </div>
 
-      <button id="logout-button" class="small-button secondary" type="button">
-        Hivoaka
-      </button>
+      <div class="top-actions">
+        <button
+          id="help-button"
+          class="small-button secondary help-trigger"
+          type="button"
+        >
+          Torolalana
+        </button>
+        <button id="logout-button" class="small-button secondary" type="button">
+          Hivoaka
+        </button>
+      </div>
     </header>
 
     <section class="card">
@@ -164,5 +181,368 @@
     </button>
   </div>
 </div>
+
+<div
+  id="help-modal"
+  class="modal-backdrop hidden"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="help-modal-title"
+>
+  <div class="modal-card help-modal-card">
+    <div class="help-modal-header">
+      <h2 id="help-modal-title">Torolalana fampiasana</h2>
+      <button
+        id="help-modal-close-top"
+        class="secondary help-close-icon"
+        type="button"
+        aria-label="Hidio"
+      >
+        ×
+      </button>
+    </div>
+
+    <div id="help-content" class="help-content">
+      <h3>Tongasoa eto amin'ny Fianarana teny alemà</h3>
+      <p>
+        Amin'ity pejy ity ianao dia mianatra teny alemà sy manazatra ny
+        fanononana marina. Mihaino anao amin'ny alalan'ny mikrô ny rindranasa,
+        manombana ho azy ny fanononanao, ary manome torohevitra hanatsarana azy.
+      </p>
+      <p>Misy <strong>dingana telo</strong> ny lesona tsirairay:</p>
+      <ol>
+        <li>
+          <strong>Fanazaran-tena amin'ny teny tsirairay:</strong> Mianatra
+          am-pilaminana miaraka amin'ny dikanteny, feo ary fandraisam-peo.
+        </li>
+        <li>
+          <strong>Fitsapana ny teny tsirairay:</strong> Manamarina fohy tsy
+          misy fanampiana raha tena hainao ilay teny.
+        </li>
+        <li>
+          <strong>Fitsapana farany:</strong> Fitsapana ny teny rehetra ao
+          amin'ny lesona — <strong>eto no ahazoana Ariary</strong>.
+        </li>
+      </ol>
+      <p>
+        Eo ambony no ahitanao ny toerana misy anao (ohatra: Teny 1 / 10) sy ny
+        fitambaran'ny vola efa azonao ao amin'ny boaty maitso
+        <strong>« Vola azo »</strong>.
+      </p>
+      <div class="help-note">
+        <strong>Torohevitra alohan'ny hanombohana:</strong> Mianara amin'ny
+        toerana mangina raha azo atao, mitenia mazava sy mafimafy ao amin'ny
+        mikrô, ary ekeo ny fahazoan-dalana hampiasa mikrô raha manontany ny
+        navigateur.
+      </div>
+
+      <h3>Dingana 1: Fanazaran-tena amin'ny teny tsirairay</h3>
+      <p>
+        Fidio eo ambony ao amin'ny <strong>« Lesona »</strong> ny lesona tianao
+        hianarana. Ao anaty efajoro lehibe no misy ny teny malagasy.
+      </p>
+      <ol>
+        <li><strong>Vakio ny teny malagasy</strong> aseho eo amin'ny efijery.</li>
+        <li>
+          <strong>Jereo ny dikanteny alemà:</strong> Tsindrio ny
+          <strong>« Asehoy ny dikanteny alemà »</strong> mba hahitana ilay teny
+          alemà.
+        </li>
+        <li>
+          <strong>Henoy ny fanononana alemà (tena ilaina!):</strong> Tsindrio ny
+          <strong>« Henoy ny teny alemà »</strong> ary mihainoa tsara ny fomba
+          fanononana azy. Azo averina henoina matetika araka izay ilainao ny feo.
+        </li>
+        <li>
+          <strong>Manonòna ary avelao hotombanana:</strong>
+          <ul>
+            <li>Tsindrio ny <strong>« Handray feo sy hanombana »</strong>.</li>
+            <li>Tonòny mazava tsara ilay teny alemà.</li>
+            <li>
+              Tsindrio ny bokotra mena <strong>« Vita »</strong> rehefa tapitra
+              (hijanona ho azy ihany ny fandraisam-peo raha tsy tsindrinao).
+            </li>
+            <li>Andraso kely mandritra ny fanombanana.</li>
+          </ul>
+        </li>
+        <li>
+          <strong>Vakio ny vokatra sy ny torohevitra:</strong>
+          <ul>
+            <li>
+              Asehon'ny rindranasa ny teny reny sy ny isanao
+              (<strong>« Isa »</strong>):
+              <ul>
+                <li><strong>1:</strong> Marina ny teny ary tsara ny fanononana!</li>
+                <li>
+                  <strong>0.75:</strong> Marina ny teny, fa mbola azo hatsaraina
+                  ny fanononana.
+                </li>
+                <li><strong>0:</strong> Diso ny teny na tsy mazava tsara.</li>
+              </ul>
+            </li>
+            <li>
+              Raha latsaky ny <strong>1</strong> ny isanao dia hisy boaty manga
+              <strong>« Torohevitra fanatsarana »</strong> hiseho. Vakio tsara
+              izany mba hahitanao ny tokony hahitsy amin'ny andrana manaraka.
+            </li>
+            <li>
+              Tsindrio ny <strong>« Eny / Tohizo »</strong> hanakatonana ny
+              vokatra.
+            </li>
+          </ul>
+        </li>
+      </ol>
+      <p>
+        Tohizo ny fanazaran-tena amin'ilay teny mandra-pahazoanao
+        <strong>Isa: 1</strong> matetika. Raha te hanafina ny dikanteny indray
+        ianao mba hanandrana avy ao an-tsaina dia tsindrio ny
+        <strong>« Avereno ity teny ity »</strong>.
+      </p>
+      <p>
+        Rehefa tena hainao ilay teny dia tsindrio ny
+        <strong>« Teny manaraka »</strong> ary ataovy toy izany ny teny rehetra
+        ao amin'ny lesona.
+      </p>
+
+      <h3>Dingana 2: Fitsapana ny teny tsirairay</h3>
+      <p>
+        Rehefa voazatra tsara ny teny rehetra sy ny fanononana azy dia tsapao
+        tsirairay izy ireo. Izany no manamarina raha hainao ilay teny
+        <strong>tsy misy fanampiana sy ao anatin'ny fotoana fohy</strong> — ary
+        io ihany koa no manokatra ny fitsapana farany.
+      </p>
+      <ol>
+        <li>
+          Mandehana amin'ny teny mbola misy marika
+          <strong>« Tsy mbola voasedra »</strong>.
+        </li>
+        <li>
+          Tsindrio ny <strong>« Fitsapana teny voafetra fotoana »</strong>.
+          <ul>
+            <li>Ho takona aloha ilay teny ary hafina ny dikanteny sy ny feo.</li>
+            <li>
+              Raha mbola te hianatra aloha ianao dia afaka miverina amin'ny
+              alalan'ny <strong>« Ajanony ny fitsapana teny »</strong>.
+            </li>
+          </ul>
+        </li>
+        <li>
+          Rehefa vonona ianao dia tsindrio ny
+          <strong>« Hanomboka handray feo »</strong>.
+        </li>
+        <li>
+          <strong>Tandremo, haingana ity dingana ity:</strong> Hiseho ilay teny
+          malagasy ary hanomboka <strong>avy hatrany</strong> ny fandraisam-peo.
+          <strong>Fotoana fohy ihany</strong> no anananao hanononana ilay teny
+          alemà. Tsindrio ny <strong>« Vita »</strong> raha vantany vao tapitra
+          ianao, na andraso ho tapitra ho azy ny fotoana.
+        </li>
+        <li>
+          <strong>Afaka sa mbola mila fanazaran-tena:</strong>
+          <ul>
+            <li>
+              Ny isa feno (<strong>Isa: 1</strong>) ihany no mahafaka ilay teny.
+              Hiova ho maitso ny marika ary hisoratra hoe
+              <strong>« Teny voasedra tsara »</strong>.
+            </li>
+            <li>
+              Raha tsy mbola afaka dia tsy misy olana: miverena mianatra kely
+              dia <strong>azo averina matetika araka izay tianao</strong> ny
+              fitsapana teny.
+            </li>
+          </ul>
+        </li>
+      </ol>
+      <p>
+        Eo ambony (ao amin'ny « X amin'ny Y teny voasedra tsara ») no ahitanao
+        hoe firy ny teny efa voasedra tsara ao amin'ny lesona.
+      </p>
+
+      <h3>Dingana 3: Fitsapana farany — Eto no ahazoana vola (Ariary)</h3>
+      <p>
+        Ao amin'ny <strong>Fitsapana farany</strong> no anaporofoanao fa hainao
+        ny lesona manontolo. <strong>Ao amin'ny fitsapana farany ihany no
+        ahazoana Ariary</strong> — tsy misy vola azo mandritra ny fanazaran-tena
+        na ny fitsapana teny tsirairay.
+      </p>
+
+      <h4>Rahoviana no misokatra ny fitsapana farany?</h4>
+      <p>
+        Rehefa saika ny teny rehetra ao amin'ny lesona no voasedra tsara tamin'ny
+        Dingana 2 (manodidina ny 90 % — aseho eo ambanin'ny fivoaranao ny isa
+        takiana), dia hisokatra ny bokotra maitso
+        <strong>« Hanomboka ny fitsapana »</strong>.
+      </p>
+      <div class="help-note">
+        <strong>Soso-kevitra:</strong> Aza manomboka ny fitsapana farany raha
+        tsy efa tena hainao tsara ny teny <strong>rehetra</strong> ao amin'ny
+        lesona — tsara indrindra raha efa voasedra tsara avokoa ny teny
+        tsirairay.
+      </div>
+
+      <h4>Ahoana ny fizotry ny fitsapana farany?</h4>
+      <ol>
+        <li>Tsindrio ny <strong>« Hanomboka ny fitsapana »</strong>.</li>
+        <li>
+          Hapetraka tsirairay amin'ny <strong>filaharana mifangaro</strong> ny
+          teny rehetra ao amin'ny lesona — tsy misy dikanteny, tsy misy feo
+          henoina, ary tsy azo dinganina.
+        </li>
+        <li>
+          Alohan'ny teny tsirairay dia takona ny efajoro
+          (« Vonona amin'ny teny manaraka »). Rehefa vonona ianao dia tsindrio
+          ny <strong>« Handray feo (Fitsapana) »</strong>.
+        </li>
+        <li>
+          Hiseho ny teny malagasy ary hanomboka avy hatrany ny fandraisam-peo.
+          <strong>Fotoana fohy ihany</strong> no anananao hanononana ilay teny
+          alemà (tsindrio ny <strong>« Vita »</strong> rehefa tapitra, na
+          andraso ho tapitra ny fotoana).
+        </li>
+        <li>
+          Aorian'ny teny tsirairay dia ho hitanao avy hatrany ny isa, ny
+          torohevitra raha ilaina, ary ny Ariary azonao tamin'ilay teny.
+          Tsindrio ny <strong>« Eny / Tohizo »</strong> hirosoana amin'ny teny
+          manaraka.
+        </li>
+      </ol>
+
+      <h4>Ahoana ny fomba fizarana ny vola (Ariary)?</h4>
+      <ul>
+        <li>
+          Ny lesona tsirairay dia manana vola (Ariary) faratampony azo raisina,
+          izay zaraina mitovy amin'ny teny rehetra ao amin'ilay lesona.
+        </li>
+        <li>
+          Ho an'ny teny tsirairay ao amin'ny fitsapana farany:
+          <ul>
+            <li>
+              <strong>Isa: 1</strong> = azonao manontolo ny vola ho an'ilay teny
+              (100 %).
+            </li>
+            <li>
+              <strong>Isa: 0.75</strong> (marina ny teny fa mbola mila
+              fanatsarana ny fanononana) = 75 % amin'ny volan'ilay teny.
+            </li>
+            <li>
+              <strong>Isa: 0</strong> (diso ny teny na tsy nisy re) = 0 Ariary.
+            </li>
+          </ul>
+        </li>
+        <li>
+          Mandritra ny fitsapana dia aseho eo amin'ny
+          <strong>« Vola vonjimaika »</strong> ny vola azonao hatreto.
+          <strong>Tsy tena voatahiry ny vola raha tsy vitanao hatramin'ny teny
+          farany ny fitsapana.</strong>
+        </li>
+      </ul>
+
+      <h4>Fitsipika tena lehibe momba ny fitsapana farany</h4>
+      <div class="help-warning">
+        <ul>
+          <li>
+            <strong>Indray mandeha ihany no ahazoana vola isaky ny lesona:</strong>
+            Raha averinao ny fitsapana dia <strong>tsy mitambatra</strong> ny
+            vola azo tamin'ny andrana samihafa.
+          </li>
+          <li>
+            <strong>Indimy (5) ihany no fara fahabetsany isaky ny lesona:</strong>
+            Azo atomboka indimy ihany ny fitsapana farany ao amin'ny lesona
+            iray. Aseho ao anaty boaty maitso ny isan'ny andrana sisa.
+          </li>
+          <li>
+            <strong>Ny vokatra farany vita ihany no manankery:</strong> Raha
+            efa nahavita fitsapana ianao ka tsindrinao ny
+            <strong>« Avereno ny fitsapana »</strong>, dia
+            <strong>hisolo</strong> ny vokatra teo aloha ny vokatra vaovao —
+            <strong>na dia kely kokoa aza ny Ariary azonao noho ny teo
+            aloha!</strong> Mety hihena izany ny volanao raha ratsy kokoa ny
+            andrana faharoa. Aza averina àry ny fitsapana raha tsy matoky ianao
+            fa tena nihatsara.
+          </li>
+          <li>
+            <strong>Isa feno = vita tanteraka:</strong> Raha mahazo isa feno
+            (1.00) ianao dia vita tanteraka ny lesona
+            (<strong>« Vita tanteraka »</strong>) ary tsy azo averina intsony.
+          </li>
+          <li>
+            <strong>Fampiatoana fitsapana:</strong> Raha tsindrinao ny
+            <strong>« Ajanony ny fitsapana »</strong> eny an-tenantenany (na
+            raha akatonao / averinao sokafana ny pejy), dia foana ny vola
+            vonjimaika tamin'ilay andrana. Raha efa nanana vokatra vita teo
+            aloha ianao dia mijanona manankery iny teo aloha iny.
+            <strong>Tandremo:</strong> Efa isaina ho andrana iray amin'ireo 5
+            ny fitsapana najanona!
+          </li>
+        </ul>
+      </div>
+
+      <h3>Miroso amin'ny lesona manaraka</h3>
+      <p>
+        Rehefa vita ny fitsapana farany ka afa-po amin'ny vokatrao ianao, dia
+        fidio ao amin'ny <strong>« Lesona »</strong> eo ambony ny lesona
+        manaraka ary atombohy indray ny <strong>Dingana 1</strong>.
+      </p>
+      <p>
+        Mitambatra ho azy ny vola azonao tamin'ny lesona rehetra vita, ary aseho
+        eo ambony ao amin'ny <strong>« Vola azo »</strong>. Raha te hiala
+        sasatra ianao dia tsindrio ny <strong>« Hivoaka »</strong> eo ambony
+        havanana — voatahiry ny fivoaranao sy ny vola efa azonao.
+      </p>
+    </div>
+
+    <div class="help-modal-footer">
+      <button id="help-modal-close-bottom" class="primary" type="button">
+        Hidio
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+  (() => {
+    const helpModal = document.getElementById("help-modal");
+    const helpContent = document.getElementById("help-content");
+    const stopButton = document.getElementById("stop-button");
+    const analysisModal = document.getElementById("analysis-modal");
+
+    function openHelp() {
+      if (
+        (stopButton && !stopButton.classList.contains("hidden")) ||
+        (analysisModal && !analysisModal.classList.contains("hidden"))
+      ) {
+        return;
+      }
+      helpModal.classList.remove("hidden");
+      if (helpContent) helpContent.scrollTop = 0;
+    }
+
+    function closeHelp() {
+      helpModal.classList.add("hidden");
+    }
+
+    document.querySelectorAll(".help-trigger").forEach(button => {
+      button.addEventListener("click", openHelp);
+    });
+
+    document
+      .getElementById("help-modal-close-top")
+      .addEventListener("click", closeHelp);
+
+    document
+      .getElementById("help-modal-close-bottom")
+      .addEventListener("click", closeHelp);
+
+    helpModal.addEventListener("click", event => {
+      if (event.target === helpModal) closeHelp();
+    });
+
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape" && !helpModal.classList.contains("hidden")) {
+        closeHelp();
+      }
+    });
+  })();
+</script>
 </body>
 </html>
